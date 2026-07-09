@@ -296,6 +296,27 @@
     font-size: 11px;
     line-height: 1.4;
   }
+  .fi-explain {
+    margin: 0;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .fi-status {
+    display: grid;
+    gap: 4px;
+    padding: 10px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+  }
+  .fi-status strong { font-size: 12px; }
+  .fi-status span { color: var(--muted); font-size: 11px; line-height: 1.35; }
+  .fi-status[data-tone="ok"] { border-color: rgba(0, 208, 132, 0.35); background: var(--accent-dim); }
+  .fi-status[data-tone="ok"] strong { color: #7dffc4; }
+  .fi-status[data-tone="warn"] { border-color: rgba(245, 165, 36, 0.35); background: var(--amber-dim); }
+  .fi-status[data-tone="warn"] strong { color: #ffd28a; }
+  .fi-status[data-tone="off"] strong { color: var(--muted); }
 </style>
 
 <header>
@@ -362,6 +383,23 @@
   </div>
 </div>
 
+<div class="panel" style="margin-top:12px">
+  <div class="field">
+    <label class="check" style="font-weight:650;font-size:13px">
+      Suavizar movimento (2×)
+      <input id="fiInfra" type="checkbox">
+    </label>
+    <p id="fiExplain" class="fi-explain">
+      Insere um frame no meio entre cada par do vídeo (estilo “soap-opera”), só em fontes ~24/30 fps.
+      Com o interruptor desligado, nada de interpolação roda.
+    </p>
+    <div id="fiStatus" class="fi-status" data-tone="off">
+      <strong id="fiStatusTitle">Desligado</strong>
+      <span id="fiStatusDetail">Ligue para testar em anime / cinema 24 fps.</span>
+    </div>
+  </div>
+</div>
+
 <div class="actions">
   <button type="button" class="primary" id="toggle" disabled>Ocultar overlay</button>
   <button type="button" class="secondary" id="reload" disabled>Recarregar página</button>
@@ -373,13 +411,13 @@
     <label class="check">Contorno de teste <input id="outline" type="checkbox"></label>
     <label class="check">Comparação 50/50 <input id="compare" type="checkbox"></label>
 
-    <div class="field-label" style="margin-top:4px"><span>Frame interpolation (A/B)</span></div>
-    <label class="check" title="Buffer t−1/t + meio-frame">1. Infra temporal <input id="fiInfra" type="checkbox"></label>
-    <label class="check" title="Detecta cortes e segura duplicate">2. Scene-cut <input id="fiSceneCut" type="checkbox"></label>
-    <label class="check" title="Só ~24/30 fps fonte">3. Gate 24/30 2× <input id="fiFpsGate" type="checkbox"></label>
-    <label class="check" title="ME em grade reduzida / luma">4. Half-res / luma <input id="fiHalfLuma" type="checkbox"></label>
-    <label class="check" title="Hierarchical block matching">5. Block match <input id="fiBlockMatch" type="checkbox"></label>
-    <label class="check" title="Confiança baixa → blend/duplicate">6. Fallback conf. <input id="fiFallback" type="checkbox"></label>
+    <div class="field-label" style="margin-top:6px"><span>Detalhes da suavização (A/B)</span></div>
+    <p class="fi-explain" style="margin:0 0 8px">Cada item é uma peça do motor. Desligue para isolar o que funciona.</p>
+    <label class="check">Cortar em mudanças de cena <input id="fiSceneCut" type="checkbox"></label>
+    <label class="check">Só em ~24/30 fps (não em 60) <input id="fiFpsGate" type="checkbox"></label>
+    <label class="check">Calcular em resolução menor (mais leve) <input id="fiHalfLuma" type="checkbox"></label>
+    <label class="check">Estimar movimento (block match) <input id="fiBlockMatch" type="checkbox"></label>
+    <label class="check">Se inseguro, misturar/repetir em vez de warp <input id="fiFallback" type="checkbox"></label>
 
     <div class="health">
       <span>Saúde</span>
@@ -387,12 +425,13 @@
     </div>
     <dl class="metrics">
       <dt>Vídeo / overlay</dt><dd id="fps">—</dd>
+      <dt>Âncoras / meios FI</dt><dd id="fiRates">—</dd>
       <dt>Escala interna</dt><dd id="renderScale">—</dd>
-      <dt>FI método</dt><dd id="fiMethod">—</dd>
-      <dt>FI elegível (fps)</dt><dd id="fiEligible">—</dd>
-      <dt>FI confiança</dt><dd id="fiConfidence">—</dd>
-      <dt>FI cut hold / par</dt><dd id="fiHold">—</dd>
-      <dt>FI sample</dt><dd id="fiSample">—</dd>
+      <dt>Método agora</dt><dd id="fiMethod">—</dd>
+      <dt>Fonte ok p/ 2×?</dt><dd id="fiEligible">—</dd>
+      <dt>Confiança do match</dt><dd id="fiConfidence">—</dd>
+      <dt>Hold de corte / par</dt><dd id="fiHold">—</dd>
+      <dt>Amostra ME</dt><dd id="fiSample">—</dd>
       <dt>Overlay não desenhado</dt><dd id="missed">—</dd>
       <dt>Vídeo descartado</dt><dd id="videoDropped">—</dd>
       <dt>Callbacks atrasados</dt><dd id="late">—</dd>
@@ -403,5 +442,5 @@
   </div>
 </details>
 
-<small class="hint" id="hint">RAVU-lite é o modo de qualidade. FSR1 é o modo leve.</small>
+<small class="hint" id="hint">RAVU/FSR melhoram nitidez. “Suavizar movimento” tenta frames extras (2×) — é outro efeito.</small>
 <script src="popup.js"></script>

@@ -31,6 +31,11 @@ const fiEligibleEl = document.querySelector("#fiEligible");
 const fiConfidenceEl = document.querySelector("#fiConfidence");
 const fiHoldEl = document.querySelector("#fiHold");
 const fiSampleEl = document.querySelector("#fiSample");
+const fiRatesEl = document.querySelector("#fiRates");
+const fiStatus = document.querySelector("#fiStatus");
+const fiStatusTitle = document.querySelector("#fiStatusTitle");
+const fiStatusDetail = document.querySelector("#fiStatusDetail");
+const fiExplain = document.querySelector("#fiExplain");
 const modeChips = [...document.querySelectorAll("#modeChips .chip")];
 const qualityChips = [...document.querySelectorAll("#qualityChips .chip")];
 const interactionChips = [...document.querySelectorAll("#interactionChips .chip")];
@@ -171,12 +176,15 @@ function render(state) {
   fiHalfLuma.checked = state.settings.fiHalfLuma !== false;
   fiBlockMatch.checked = state.settings.fiBlockMatch !== false;
   fiFallback.checked = state.settings.fiFallback !== false;
-  for (const el of fiChecks) el.disabled = false;
-  fiSceneCut.disabled = !fiInfra.checked;
-  fiFpsGate.disabled = !fiInfra.checked;
-  fiHalfLuma.disabled = !fiInfra.checked;
-  fiBlockMatch.disabled = !fiInfra.checked;
-  fiFallback.disabled = !fiInfra.checked;
+  for (const el of fiChecks) {
+    if (el) el.disabled = false;
+  }
+  const subDisabled = !fiInfra.checked;
+  fiSceneCut.disabled = subDisabled;
+  fiFpsGate.disabled = subDisabled;
+  fiHalfLuma.disabled = subDisabled;
+  fiBlockMatch.disabled = subDisabled;
+  fiFallback.disabled = subDisabled;
 
   toggle.disabled = state.settings.mode === "off" ||
     !state.hasVideo || state.status !== "ok";
@@ -189,19 +197,61 @@ function render(state) {
   fps.textContent = `${state.metrics.videoFps.toFixed(1)} / ${state.metrics.fps.toFixed(1)} fps`;
   renderScale.textContent = `${Math.round(state.metrics.renderScale * 100)}%`;
   const fi = state.fi || {};
-  fiMethodEl.textContent = state.settings.fiInfra
-    ? (fi.method || "—")
-    : "off";
+  const methodNames = {
+    skip: "sem meios",
+    blend: "mistura (fraco)",
+    block: "movimento (mais visível)",
+    duplicate: "cópia (não suaviza)",
+    off: "desligado",
+  };
+  const methodKey = state.settings.fiInfra ? (fi.method || "skip") : "off";
+  fiMethodEl.textContent = methodNames[methodKey] || methodKey;
   fiEligibleEl.textContent = state.settings.fiInfra
-    ? `${fi.fpsEligible ? "sim" : "não"} (${(fi.videoFps || 0).toFixed(1)} fps)`
+    ? `${fi.fpsEligible ? "sim" : "não"} · fonte ${(fi.videoFps || 0).toFixed(1)} fps`
     : "—";
   fiConfidenceEl.textContent = state.settings.fiInfra && fi.confidence != null
     ? `${(fi.confidence * 100).toFixed(0)}%`
     : "—";
   fiHoldEl.textContent = state.settings.fiInfra
-    ? `${fi.sceneCutHold || 0} / ${fi.hasPair ? "par ok" : "sem par"}`
+    ? `${fi.sceneCutHold || 0} · ${fi.hasPair ? "par ok" : "sem par ainda"}`
     : "—";
   fiSampleEl.textContent = fi.sample || "—";
+  fiRatesEl.textContent = state.settings.fiInfra
+    ? `${(fi.realPerSec || 0).toFixed(0)} / ${(fi.midPerSec || 0).toFixed(0)} por s`
+    : "—";
+
+  // Human status card
+  const explain = fi.explain ||
+    (state.settings.fiInfra
+      ? "Suavização ligada — veja o detalhe abaixo."
+      : "Suavização desligada.");
+  if (fiExplain) {
+    fiExplain.textContent =
+      "Gera um frame no meio (2×) em vídeos ~24/30 fps. Não é nitidez (isso é FSR/RAVU).";
+  }
+  if (fiStatus && fiStatusTitle && fiStatusDetail) {
+    let tone = "off";
+    let title = "Desligado";
+    if (!state.settings.fiInfra) {
+      title = "Desligado";
+      tone = "off";
+    } else if (!fi.fpsEligible && state.settings.fiFpsGate) {
+      title = "Ligado, mas fonte não é 24/30";
+      tone = "warn";
+    } else if ((fi.midPerSec || 0) >= (fi.realPerSec || 0) * 0.5 && (fi.realPerSec || 0) > 5) {
+      title = methodKey === "block" ? "Gerando meios (movimento)" :
+        methodKey === "blend" ? "Gerando meios (mistura fraca)" :
+          "Gerando meios";
+      tone = methodKey === "blend" || methodKey === "duplicate" ? "warn" : "ok";
+    } else if (state.settings.fiInfra) {
+      title = "Ligado, efeito pouco visível";
+      tone = "warn";
+    }
+    fiStatus.dataset.tone = tone;
+    fiStatusTitle.textContent = title;
+    fiStatusDetail.textContent = explain;
+  }
+
   missed.textContent = `${state.metrics.missed} (${state.metrics.missedPct.toFixed(1)}%)`;
   videoDropped.textContent =
     `${state.metrics.videoDropped} (${state.metrics.videoDroppedPct.toFixed(1)}%)`;

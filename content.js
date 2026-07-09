@@ -423,6 +423,11 @@ let fiWarpPrevLoc = null, fiWarpCurrLoc = null, fiWarpMvLoc = null;
 let fiWarpTexelLoc = null, fiWarpGridLoc = null, fiWarpPhaseLoc = null;
 let fiOutW = 0, fiOutH = 0;
 let fiDrawingMid = false;
+let fiMidDrawsWindow = 0;
+let fiRealDrawsWindow = 0;
+let fiMidPerSec = 0;
+let fiRealPerSec = 0;
+let fiLastExplain = "";
 
 function log(...args) {
   console.log(TAG, ...args);
@@ -698,10 +703,44 @@ function adaptRenderScale(report) {
   }
 }
 
+function fiExplainStatus() {
+  if (!settings.fiInfra) {
+    return "Suavização desligada. Use o interruptor “Suavizar movimento” para tentar 2× em vídeos 24/30 fps.";
+  }
+  if (settings.fiFpsGate && !fiFpsEligibleSticky) {
+    return `Fonte ~${(metricReport.videoFps || 0).toFixed(0)} fps: 2× não se aplica (só ~24/30). Não espere efeito de soap-opera.`;
+  }
+  if (!fiHasPrev || !fiHasCurr) {
+    return "Aguardando o segundo frame do vídeo para montar o par…";
+  }
+  const mids = fiMidPerSec;
+  const reals = fiRealPerSec;
+  const methodPt = {
+    skip: "sem meios",
+    blend: "mistura (efeito fraco — fantasma leve)",
+    block: "movimento estimado (mais visível em pans)",
+    duplicate: "repete frame (não suaviza)",
+  }[fiMethod] || fiMethod;
+  if (fiMethod === "skip") {
+    return "Infra ligada, mas o motor não está gerando meios agora.";
+  }
+  if (mids < reals * 0.35 && reals > 5) {
+    return `Método: ${methodPt}. Meios quase não entram (${mids.toFixed(0)}/s vs ${reals.toFixed(0)} âncoras) — CPU alto; a imagem parece a mesma.`;
+  }
+  if (fiMethod === "blend" || fiMethod === "duplicate") {
+    return `Método: ${methodPt}. Confiança ${(fiConfidence * 100).toFixed(0)}%. Em muita cena o olho mal nota. Em Avançado: desligue “Fallback” para forçar block match.`;
+  }
+  return `Método: ${methodPt}. Meios ~${mids.toFixed(0)}/s · âncoras ~${reals.toFixed(0)}/s · confiança ${(fiConfidence * 100).toFixed(0)}%.`;
+}
+
 function publishMetrics(now) {
   if (!metricWindow || metricWindow.callbacks === 0 || now - metricWindow.start < 1000) return;
   const elapsed = now - metricWindow.start;
   const totalFrames = metricWindow.drawn + metricWindow.missed;
+  fiMidPerSec = fiMidDrawsWindow * 1000 / elapsed;
+  fiRealPerSec = fiRealDrawsWindow * 1000 / elapsed;
+  fiMidDrawsWindow = 0;
+  fiRealDrawsWindow = 0;
   metricReport = {
     fps: metricWindow.drawn * 1000 / elapsed,
     videoFps: metricWindow.mediaDelta
@@ -726,6 +765,7 @@ function publishMetrics(now) {
       : null,
     renderScale: effectiveRenderScale(),
   };
+  fiLastExplain = fiExplainStatus();
   if (schedulerMode === "video" && shouldUseDisplayScheduler(metricReport)) {
     schedulerMode = "display";
     log("rVFC perdeu frames; trocando para sincronização com a tela");
@@ -1121,14 +1161,16 @@ function fiScheduleMidFrame() {
   cancelFiMid();
   if (!settings.fiInfra || !canRender() || fiMethod === "skip") return;
   if (!fiHasPrev || !fiHasCurr) return;
+  // blend/block/duplicate all produce a mid; only skip aborts.
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
-  const delay = Math.max(6, Math.min(40, 500 / fps));
+  const delay = Math.max(4, Math.min(28, 450 / fps));
   fiMidTimer = setTimeout(() => {
     fiMidTimer = null;
     if (!settings.fiInfra || !canRender() || fiMethod === "skip") return;
     fiDrawingMid = true;
     try {
-      draw({ fiMid: true });
+      // Mid path is lightweight (no full RAVU) so 2× can actually land under load.
+      draw({ fiMid: true, fiLight: true });
     } finally {
       fiDrawingMid = false;
     }
@@ -1565,6 +1607,41 @@ function draw(options = {}) {
     }
     sourceTex = fiOutTexture;
     fiTag = ` · FI ${fiMethod}`;
+    // Lightweight mid: show FI result with a cheap blit (no second RAVU/EASU).
+    // Full spatial path on mid was ~doubling 30ms work → meios never landed.
+    if (options.fiLight !== false) {
+      const w = fiOutW || textureWidth;
+      const h = fiOutH || textureHeight;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.useProgram(program);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, fiOutTexture);
+      setDirectUniforms(
+        1 / Math.max(1, w), 1 / Math.max(1, h),
+        0, settings.compare ? 1 : 0,
+      );
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const labels = {
+        blend: "mistura",
+        block: "movimento",
+        duplicate: "cópia",
+      };
+      activePipeline = `FI meio (${labels[fiMethod] || fiMethod})`;
+      if (gpuQuery) {
+        gl.endQuery(timerExt.TIME_ELAPSED_EXT);
+        gpuQueries.push(gpuQuery);
+      }
+      updateCanvasDataset(activePipeline, "");
+      recordDraw(measureCpu ? performance.now() - cpuStart : null);
+      fiMidDrawsWindow++;
+      if (status !== "ok") {
+        status = "ok";
+        lastError = "";
+      }
+      updateCanvasVisibility();
+      return;
+    }
   } else {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -1717,6 +1794,8 @@ function draw(options = {}) {
   }
   updateCanvasDataset(activePipeline, "");
   recordDraw(measureCpu ? performance.now() - cpuStart : null);
+  if (isFiMid) fiMidDrawsWindow++;
+  else fiRealDrawsWindow++;
 
   if (status !== "ok") {
     status = "ok";
@@ -2122,6 +2201,9 @@ function snapshot() {
       hasPair: fiHasPrev && fiHasCurr,
       halfLuma: Boolean(settings.fiHalfLuma),
       sample: fiLumaW && fiLumaH ? `${fiLumaW}×${fiLumaH}` : "—",
+      midPerSec: fiMidPerSec,
+      realPerSec: fiRealPerSec,
+      explain: fiLastExplain || fiExplainStatus(),
     },
   };
 }
