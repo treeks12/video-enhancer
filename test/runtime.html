@@ -1,0 +1,122 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FV runtime test</title>
+<style>
+  body { min-height: 3000px; margin: 24px; background: #181818; color: white; font: 16px sans-serif; }
+  #player { position: relative; width: 640px; margin-top: 900px; }
+  video { display: block; width: 640px; height: 360px; }
+  #source { display: none; }
+</style>
+<h1>Firefox Video Enhancer — runtime test</h1>
+<p id="status">Aguardando a extensão…</p>
+<div id="player"></div>
+<canvas id="source" width="640" height="360"></canvas>
+<script>
+  const source = document.querySelector("#source");
+  const ctx = source.getContext("2d");
+  const video = document.createElement("video");
+  const expectedPipeline = new URLSearchParams(location.search).get("pipeline");
+  video.muted = true;
+  video.autoplay = true;
+  let frame = 0;
+
+  function paint() {
+    const x = frame++ % source.width;
+    ctx.fillStyle = "#204080";
+    ctx.fillRect(0, 0, source.width, source.height);
+    ctx.fillStyle = "#ffcc00";
+    ctx.fillRect(x, 80, 80, 200);
+    ctx.fillStyle = "white";
+    ctx.font = "48px sans-serif";
+    ctx.fillText("passthrough", 170, 205);
+    requestAnimationFrame(paint);
+  }
+
+  paint();
+  let prematureOverlay = false;
+  let overlayBeforeReveal = false;
+  setTimeout(() => {
+    prematureOverlay = Boolean(document.querySelector("#fv-enhancer-canvas"));
+  }, 150);
+  setTimeout(() => {
+    document.querySelector("#player").append(video);
+    video.srcObject = source.captureStream(30);
+    video.play();
+  }, 300);
+  setTimeout(() => {
+    overlayBeforeReveal = Boolean(document.querySelector("#fv-enhancer-canvas"));
+    window.scrollTo(0, 700);
+  }, 700);
+
+  let resized = false;
+  let scrollStarted = false;
+  let scrollStartedAt = 0;
+  let scrollTimerExtended = false;
+  let sawHiddenDuringScroll = false;
+  let offscreenStartedAt = 0;
+  let sawHiddenOffscreen = false;
+  let returningOnscreen = false;
+  const check = setInterval(() => {
+    const overlay = document.querySelector("#fv-enhancer-canvas");
+    if (!overlay || overlay.width === 0 || overlay.height === 0) return;
+    if (expectedPipeline &&
+        !overlay.dataset.fvPipeline?.toLowerCase().includes(expectedPipeline)) return;
+    if (!resized) {
+      resized = true;
+      document.querySelector("#player").style.width = "800px";
+      video.style.width = "800px";
+      video.style.height = "450px";
+      return;
+    }
+    if (overlay.style.width !== "800px" || overlay.style.height !== "450px") return;
+    if (!scrollStarted) {
+      scrollStarted = true;
+      scrollStartedAt = performance.now();
+      window.scrollTo(0, 750);
+      setTimeout(() => window.scrollTo(0, 760), 80);
+      return;
+    }
+    if (!sawHiddenDuringScroll) {
+      if (overlay.style.visibility === "hidden") sawHiddenDuringScroll = true;
+      return;
+    }
+    if (!scrollTimerExtended) {
+      if (performance.now() - scrollStartedAt < 220) return;
+      if (overlay.style.visibility !== "hidden") {
+        throw new Error("overlay voltou durante scroll contínuo");
+      }
+      scrollTimerExtended = true;
+      return;
+    }
+    if (!offscreenStartedAt && overlay.style.visibility !== "visible") return;
+    if (!offscreenStartedAt) {
+      offscreenStartedAt = performance.now();
+      window.scrollTo(0, 1800);
+      return;
+    }
+    if (!sawHiddenOffscreen) {
+      if (performance.now() - offscreenStartedAt > 300 &&
+          overlay.style.visibility === "hidden") {
+      sawHiddenOffscreen = true;
+      returningOnscreen = true;
+        window.scrollTo(0, 700);
+      }
+      return;
+    }
+    if (returningOnscreen && overlay.style.visibility !== "visible") return;
+    if (prematureOverlay || overlayBeforeReveal) {
+      throw new Error("overlay criado antes de existir vídeo visível");
+    }
+    const message = `PASS: overlay ${overlay.width}×${overlay.height}`;
+    document.querySelector("#status").textContent = message;
+    document.title = message;
+    fetch(`/__fve_pass?size=${overlay.width}x${overlay.height}`).catch(() => {});
+    clearInterval(check);
+  }, 100);
+  setTimeout(() => {
+    const overlay = document.querySelector("#fv-enhancer-canvas");
+    if (expectedPipeline && !overlay?.dataset.fvPipeline?.toLowerCase().includes(expectedPipeline)) {
+      fetch(`/__pipeline_timeout?canvas=${Boolean(overlay)}&pipeline=${encodeURIComponent(overlay?.dataset.fvPipeline || "")}&error=${encodeURIComponent(overlay?.dataset.fvError || "")}&size=${overlay?.width || 0}x${overlay?.height || 0}`).catch(() => {});
+    }
+  }, 5000);
+</script>

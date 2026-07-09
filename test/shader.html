@@ -1,0 +1,336 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FV shader check</title>
+<p id="result">Compilando…</p>
+<pre id="benchmark"></pre>
+<script src="../third_party/ravu-lite/ravu-lite-webgl2.js"></script>
+<script>
+  function compile(gl, type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      throw new Error(gl.getShaderInfoLog(shader));
+    }
+    return shader;
+  }
+
+  function extract(source, name) {
+    const marker = `const ${name} = \``;
+    const start = source.indexOf(marker) + marker.length;
+    return source.slice(start, source.indexOf("`;", start));
+  }
+
+  function link(gl, vertex, fragment) {
+    const program = gl.createProgram();
+    gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, vertex));
+    gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, fragment));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      throw new Error(gl.getProgramInfoLog(program));
+    }
+    return program;
+  }
+
+  fetch("../content.js").then((response) => response.text()).then(async (source) => {
+    const gl = document.createElement("canvas").getContext("webgl2");
+    if (!gl) throw new Error("WebGL2 indisponível");
+    const vertex = extract(source, "VERT");
+    const fragment = extract(source, "FRAG");
+    const program = link(gl, vertex, fragment);
+    const easuProgram = link(gl, vertex, extract(source, "EASU_FRAG"));
+    const rcasProgram = link(gl, extract(source, "VERT_PLAIN"), fragment);
+    const ravuStepProgram = link(gl, vertex, globalThis.__fvRavuShaders.step1);
+    const ravuComposeProgram = link(
+      gl, extract(source, "VERT_PLAIN"), globalThis.__fvRavuShaders.compose,
+    );
+
+    const pixels = new Uint8Array(3 * 3 * 4).fill(255);
+    for (let i = 0; i < 9; i++) {
+      pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = i === 4 ? 128 : 64;
+    }
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 3, 3, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, "a_pos");
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    gl.useProgram(program);
+    gl.uniform1i(gl.getUniformLocation(program, "u_tex"), 0);
+    gl.uniform2f(gl.getUniformLocation(program, "u_texel"), 1 / 3, 1 / 3);
+    gl.uniform1f(gl.getUniformLocation(program, "u_compare"), 0);
+    gl.viewport(0, 0, 3, 3);
+
+    function center(strength) {
+      gl.uniform1f(gl.getUniformLocation(program, "u_strength"), strength);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      const pixel = new Uint8Array(4);
+      gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      return pixel[0];
+    }
+
+    const passthrough = center(0);
+    const sharpened = center(1);
+    if (Math.abs(passthrough - 128) > 2 || sharpened <= passthrough + 20) {
+      throw new Error(`resultado inesperado: passthrough=${passthrough}, RCAS=${sharpened}`);
+    }
+
+    gl.uniform1f(gl.getUniformLocation(program, "u_compare"), 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const divider = new Uint8Array(4);
+    gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, divider);
+    if (divider[0] !== 0 || divider[1] !== 255 || Math.abs(divider[2] - 135) > 2) {
+      throw new Error(`divisor 50/50 inesperado: ${divider.join(",")}`);
+    }
+
+    async function fetchLutBuffer() {
+      return fetch("../third_party/ravu-lite/ravu-lite-lut3.bin")
+        .then((response) => response.arrayBuffer());
+    }
+    let lutBuffer = await fetchLutBuffer();
+    if (lutBuffer.byteLength !== 59904) lutBuffer = await fetchLutBuffer();
+    if (lutBuffer.byteLength !== 59904) {
+      throw new Error(`LUT RAVU com ${lutBuffer.byteLength} bytes; esperado 59904`);
+    }
+    const lutData = new Float32Array(lutBuffer);
+    const lut = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, lut);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA16F, 13, 288, 0, gl.RGBA, gl.FLOAT, lutData,
+    );
+    const packed = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, packed);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0,
+      gl.getExtension("EXT_color_buffer_float") ? gl.RGBA16F : gl.RGBA8,
+      3, 3, 0, gl.RGBA,
+      gl.getExtension("EXT_color_buffer_float") ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE,
+      null,
+    );
+    const ravuFramebuffer = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ravuFramebuffer);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, packed, 0,
+    );
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      throw new Error("framebuffer RAVU incompleto");
+    }
+    gl.viewport(0, 0, 3, 3);
+    gl.useProgram(ravuStepProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(gl.getUniformLocation(ravuStepProgram, "u_source"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, lut);
+    gl.uniform1i(gl.getUniformLocation(ravuStepProgram, "u_lut"), 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    gl.canvas.width = 6;
+    gl.canvas.height = 6;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, 6, 6);
+    gl.useProgram(ravuComposeProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(gl.getUniformLocation(ravuComposeProgram, "u_source"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, packed);
+    gl.uniform1i(gl.getUniformLocation(ravuComposeProgram, "u_packed"), 1);
+    gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_source_size"), 3, 3);
+    gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_output_texel"), 1 / 6, 1 / 6);
+    gl.uniform1f(gl.getUniformLocation(ravuComposeProgram, "u_compare"), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const ravuPixels = new Uint8Array(6 * 6 * 4);
+    gl.readPixels(0, 0, 6, 6, gl.RGBA, gl.UNSIGNED_BYTE, ravuPixels);
+    const ravuPixel = new Uint8Array(4);
+    gl.readPixels(3, 3, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, ravuPixel);
+    if (gl.getError() !== gl.NO_ERROR || ravuPixel[3] !== 255) {
+      throw new Error(`saída RAVU inválida: ${ravuPixel.join(",")}`);
+    }
+    gl.useProgram(program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(gl.getUniformLocation(program, "u_tex"), 0);
+    gl.uniform2f(gl.getUniformLocation(program, "u_texel"), 1 / 3, 1 / 3);
+    gl.uniform1f(gl.getUniformLocation(program, "u_strength"), 0);
+    gl.uniform1f(gl.getUniformLocation(program, "u_compare"), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const referencePixels = new Uint8Array(6 * 6 * 4);
+    gl.readPixels(0, 0, 6, 6, gl.RGBA, gl.UNSIGNED_BYTE, referencePixels);
+
+    const ravuRcasTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, ravuRcasTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 6, 6, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const ravuRcasFramebuffer = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ravuRcasFramebuffer);
+    gl.framebufferTexture2D(
+      gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ravuRcasTexture, 0,
+    );
+    gl.viewport(0, 0, 6, 6);
+    gl.useProgram(ravuComposeProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.uniform1i(gl.getUniformLocation(ravuComposeProgram, "u_source"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, packed);
+    gl.uniform1i(gl.getUniformLocation(ravuComposeProgram, "u_packed"), 1);
+    gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_source_size"), 3, 3);
+    gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_output_texel"), 1 / 6, 1 / 6);
+    gl.uniform1f(gl.getUniformLocation(ravuComposeProgram, "u_compare"), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.useProgram(rcasProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, ravuRcasTexture);
+    gl.uniform1i(gl.getUniformLocation(rcasProgram, "u_tex"), 0);
+    gl.uniform2f(gl.getUniformLocation(rcasProgram, "u_texel"), 1 / 6, 1 / 6);
+    gl.uniform1f(gl.getUniformLocation(rcasProgram, "u_strength"), 1);
+    gl.uniform1f(gl.getUniformLocation(rcasProgram, "u_compare"), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const ravuRcasPixels = new Uint8Array(6 * 6 * 4);
+    gl.readPixels(0, 0, 6, 6, gl.RGBA, gl.UNSIGNED_BYTE, ravuRcasPixels);
+
+    let ravuDifference = 0;
+    let ravuRcasDifference = 0;
+    for (let i = 0; i < ravuPixels.length; i += 4) {
+      ravuDifference += Math.abs(ravuPixels[i] - referencePixels[i]);
+      ravuRcasDifference += Math.abs(ravuRcasPixels[i] - referencePixels[i]);
+    }
+    if (ravuDifference < 20) throw new Error("RAVU não alterou a referência bilinear");
+    if (ravuRcasDifference <= ravuDifference) {
+      throw new Error(`RAVU+RCAS não aumentou o efeito: ${ravuRcasDifference} <= ${ravuDifference}`);
+    }
+    const message =
+      `PASS: passthrough=${passthrough}, RCAS=${sharpened}, RAVU Δ=${ravuDifference}, RAVU+RCAS Δ=${ravuRcasDifference}`;
+    document.querySelector("#result").textContent = message;
+    fetch(`/__shader_pass?message=${encodeURIComponent(message)}`).catch(() => {});
+
+    if (new URLSearchParams(location.search).has("benchmark")) {
+      const intermediate = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, intermediate);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      const framebuffer = gl.createFramebuffer();
+
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 960, 540, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindTexture(gl.TEXTURE_2D, packed);
+      gl.texImage2D(
+        gl.TEXTURE_2D, 0,
+        gl.getExtension("EXT_color_buffer_float") ? gl.RGBA16F : gl.RGBA8,
+        960, 540, 0, gl.RGBA,
+        gl.getExtension("EXT_color_buffer_float") ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE,
+        null,
+      );
+      gl.bindFramebuffer(gl.FRAMEBUFFER, ravuFramebuffer);
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, packed, 0,
+      );
+
+      const timerQuery = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+      async function timeDraws(count) {
+        if (timerQuery) {
+          const query = gl.createQuery();
+          gl.beginQuery(timerQuery.TIME_ELAPSED_EXT, query);
+          for (let i = 0; i < count; i++) gl.drawArrays(gl.TRIANGLES, 0, 3);
+          gl.endQuery(timerQuery.TIME_ELAPSED_EXT);
+          while (!gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE)) {
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+          }
+          const milliseconds = gl.getQueryParameter(query, gl.QUERY_RESULT) / 1e6 / count;
+          gl.deleteQuery(query);
+          if (!gl.getParameter(timerQuery.GPU_DISJOINT_EXT)) return milliseconds;
+        }
+        const probe = new Uint8Array(4);
+        gl.finish();
+        const start = performance.now();
+        for (let i = 0; i < count; i++) gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, probe);
+        return (performance.now() - start) / count;
+      }
+
+      const rows = [];
+      for (const [label, width, height] of [
+        ["1080p", 1920, 1080], ["1440p", 2560, 1440], ["4K", 3840, 2160],
+      ]) {
+        gl.canvas.width = width;
+        gl.canvas.height = height;
+        gl.viewport(0, 0, width, height);
+        gl.bindTexture(gl.TEXTURE_2D, intermediate);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, intermediate, 0,
+        );
+        gl.useProgram(easuProgram);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.uniform1i(gl.getUniformLocation(easuProgram, "u_tex"), 0);
+        const easuMs = await timeDraws(3);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.useProgram(rcasProgram);
+        gl.bindTexture(gl.TEXTURE_2D, intermediate);
+        gl.uniform1i(gl.getUniformLocation(rcasProgram, "u_tex"), 0);
+        gl.uniform2f(gl.getUniformLocation(rcasProgram, "u_texel"), 1 / width, 1 / height);
+        gl.uniform1f(gl.getUniformLocation(rcasProgram, "u_strength"), 1);
+        gl.uniform1f(gl.getUniformLocation(rcasProgram, "u_compare"), 0);
+        const rcasMs = await timeDraws(5);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, ravuFramebuffer);
+        gl.viewport(0, 0, 960, 540);
+        gl.useProgram(ravuStepProgram);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.uniform1i(gl.getUniformLocation(ravuStepProgram, "u_source"), 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, lut);
+        gl.uniform1i(gl.getUniformLocation(ravuStepProgram, "u_lut"), 1);
+        const ravuStepMs = await timeDraws(3);
+
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, width, height);
+        gl.useProgram(ravuComposeProgram);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.uniform1i(gl.getUniformLocation(ravuComposeProgram, "u_source"), 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, packed);
+        gl.uniform1i(gl.getUniformLocation(ravuComposeProgram, "u_packed"), 1);
+        gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_source_size"), 960, 540);
+        gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_output_texel"), 1 / width, 1 / height);
+        gl.uniform1f(gl.getUniformLocation(ravuComposeProgram, "u_compare"), 0);
+        const ravuComposeMs = await timeDraws(5);
+        rows.push(
+          `${label}: EASU ${easuMs.toFixed(2)} + RCAS ${rcasMs.toFixed(2)} ms` +
+          ` | RAVU ${ravuStepMs.toFixed(2)} + compose ${ravuComposeMs.toFixed(2)} ms`,
+        );
+      }
+      document.querySelector("#benchmark").textContent =
+        `${timerQuery ? "Timer GPU" : "Fallback CPU"}\n${rows.join("\n")}`;
+    }
+  }).catch((error) => {
+    const message = `FAIL: ${error.message}`;
+    document.querySelector("#result").textContent = message;
+    fetch(`/__shader_fail?message=${encodeURIComponent(message)}`).catch(() => {});
+  });
+</script>

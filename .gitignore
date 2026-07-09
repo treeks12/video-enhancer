@@ -1,0 +1,5 @@
+# Firefox Video Enhancer local
+*.zip
+.DS_Store
+Thumbs.db
+node_modules/

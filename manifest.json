@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Firefox Video Enhancer",
+  "version": "0.0.35",
+  "description": "Aplica FSR1 ou RAVU-lite + RCAS ao vídeo principal usando WebGL2.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "firefox-video-enhancer@spike.local",
+      "data_collection_permissions": {
+        "required": ["none"]
+      },
+      "strict_min_version": "142.0"
+    }
+  },
+  "permissions": ["activeTab", "storage"],
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "action": {
+    "default_title": "Firefox Video Enhancer",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon.svg",
+      "96": "icons/icon.svg"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "third_party/ravu-lite/ravu-lite-lut3.bin",
+        "third_party/ravu-lite/ravu-lite-webgl2.js"
+      ],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+AMD FidelityFX Super Resolution 1 (FSR1)
+Copyright (c) 2021 Advanced Micro Devices, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+
+RAVU-Lite-AR r3 from bjin/mpv-prescalers
+Upstream commit: 3f24e7c53085854d122bb5d6629d1d503ba29e35
+Source: https://github.com/bjin/mpv-prescalers
+
+Copyright belongs to the upstream mpv-prescalers contributors.
+Licensed under the GNU Lesser General Public License, version 3 or later.
+The complete license and original preferred source are distributed in:
+
+  third_party/ravu-lite/LICENSE
+  third_party/ravu-lite/ravu-lite-ar-r3.hook
+
+Local modifications are in third_party/ravu-lite/ravu-lite-webgl2.js:
+the mpv hook interface was ported to WebGL2, RGB input is converted to
+luminance, and the original 2x selection pass is fused with arbitrary-ratio
+RGB recomposition. The unmodified trained LUT is distributed as
+third_party/ravu-lite/ravu-lite-lut3.bin.

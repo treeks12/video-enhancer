@@ -1,0 +1,393 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>Firefox Video Enhancer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #12141a;
+    --panel: #1c1f27;
+    --panel-2: #242833;
+    --border: #343a48;
+    --text: #f2f4f8;
+    --muted: #9aa3b5;
+    --faint: #6b7385;
+    --accent: #00d084;
+    --accent-dim: rgba(0, 208, 132, 0.14);
+    --blue: #3b82f6;
+    --blue-dim: rgba(59, 130, 246, 0.16);
+    --amber: #f5a524;
+    --amber-dim: rgba(245, 165, 36, 0.16);
+    --red: #f2555a;
+    --red-dim: rgba(242, 85, 90, 0.16);
+    --gray: #8b93a7;
+    --gray-dim: rgba(139, 147, 167, 0.14);
+    font: 13px/1.35 system-ui, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    width: 300px;
+    margin: 0;
+    padding: 14px;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+  }
+  .logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    flex: none;
+    background: linear-gradient(145deg, #1a3d32, #0d221c);
+    border: 1px solid rgba(0, 208, 132, 0.35);
+    display: grid;
+    place-items: center;
+  }
+  .logo svg { width: 16px; height: 16px; display: block; }
+  h1 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+  .version {
+    margin-top: 1px;
+    color: var(--faint);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #statusChip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 100%;
+    margin: 0 0 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: var(--gray-dim);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  #statusChip[data-tone="ok"] { background: var(--accent-dim); color: #7dffc4; }
+  #statusChip[data-tone="idle"] { background: var(--blue-dim); color: #9ec1ff; }
+  #statusChip[data-tone="warn"] { background: var(--amber-dim); color: #ffd28a; }
+  #statusChip[data-tone="error"] { background: var(--red-dim); color: #ff9ea1; }
+  #statusChip[data-tone="off"] { background: var(--gray-dim); color: var(--muted); }
+  #dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--gray);
+    flex: none;
+    box-shadow: 0 0 0 3px rgba(139, 147, 167, 0.15);
+  }
+  #statusChip[data-tone="ok"] #dot { background: var(--accent); box-shadow: 0 0 0 3px rgba(0, 208, 132, 0.18); }
+  #statusChip[data-tone="idle"] #dot { background: var(--blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18); }
+  #statusChip[data-tone="warn"] #dot { background: var(--amber); box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.18); }
+  #statusChip[data-tone="error"] #dot { background: var(--red); box-shadow: 0 0 0 3px rgba(242, 85, 90, 0.18); }
+
+  #detail {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-size: 12px;
+    min-height: 1.35em;
+  }
+
+  .panel {
+    display: grid;
+    gap: 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+  }
+
+  .field { display: grid; gap: 7px; }
+  .field-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .field-label output {
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 650;
+    font-variant-numeric: tabular-nums;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chip {
+    appearance: none;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-2);
+    color: var(--muted);
+    padding: 7px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .12s, border-color .12s, color .12s;
+  }
+  .chip:hover:not(:disabled) {
+    border-color: #4a5163;
+    color: var(--text);
+  }
+  .chip[aria-pressed="true"] {
+    background: var(--accent-dim);
+    border-color: rgba(0, 208, 132, 0.45);
+    color: #9cffd5;
+  }
+  .chip:disabled {
+    opacity: .45;
+    cursor: default;
+  }
+  .chip .badge {
+    display: inline-block;
+    margin-left: 4px;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba(245, 165, 36, 0.18);
+    color: #ffd28a;
+    font-size: 10px;
+    font-weight: 700;
+    vertical-align: 1px;
+  }
+  .chip.preset { min-width: 0; flex: 1; padding-inline: 6px; text-align: center; }
+  .chip.preset[aria-pressed="true"] {
+    background: var(--blue-dim);
+    border-color: rgba(59, 130, 246, 0.45);
+    color: #b7d0ff;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    margin: 0;
+    accent-color: var(--accent);
+  }
+  input[type="range"]:disabled { opacity: .45; }
+
+  .actions { display: grid; gap: 7px; margin-top: 12px; }
+  button.primary, button.secondary {
+    width: 100%;
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 8px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.primary { background: var(--blue); color: white; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.06); }
+  button.secondary {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button.secondary:hover:not(:disabled) { border-color: #4a5163; }
+  button:disabled { opacity: .45; cursor: default; filter: none; }
+
+  details.advanced {
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel);
+    overflow: hidden;
+  }
+  details.advanced > summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 10px 12px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 650;
+    user-select: none;
+  }
+  details.advanced > summary::-webkit-details-marker { display: none; }
+  details.advanced > summary::before {
+    content: "▸";
+    display: inline-block;
+    width: 1em;
+    color: var(--faint);
+    transition: transform .12s;
+  }
+  details.advanced[open] > summary::before { transform: rotate(90deg); }
+  details.advanced > summary:hover { color: var(--text); }
+  .advanced-body {
+    display: grid;
+    gap: 10px;
+    padding: 0 12px 12px;
+    border-top: 1px solid transparent;
+  }
+  details.advanced[open] .advanced-body { border-top-color: var(--border); padding-top: 10px; }
+
+  .check {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .check input { accent-color: var(--accent); }
+
+  .health {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    font-size: 12px;
+  }
+  .health span { color: var(--muted); }
+  .health strong[data-tone="ok"] { color: #7dffc4; }
+  .health strong[data-tone="warn"] { color: #ffd28a; }
+  .health strong[data-tone="off"] { color: var(--muted); }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 11px;
+  }
+  .metrics dt { color: var(--faint); }
+  .metrics dd {
+    margin: 0;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  .hint {
+    display: block;
+    margin-top: 12px;
+    color: var(--faint);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+</style>
+
+<header>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 16 16" fill="none">
+        <path d="M2.5 11.5L6 4.5l2.2 4.2L10.5 5l3 6.5" stroke="#00d084" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M2 13h12" stroke="#00d084" stroke-opacity=".45" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Video Enhancer</h1>
+      <div class="version" id="version">v—</div>
+    </div>
+  </div>
+</header>
+
+<div id="statusChip" data-tone="warn" aria-live="polite">
+  <span id="dot"></span>
+  <span id="label">Consultando…</span>
+</div>
+<p id="detail">Carregando configuração…</p>
+
+<div class="panel">
+  <div class="field">
+    <div class="field-label"><span>Efeito</span></div>
+    <div class="chips" id="modeChips" role="group" aria-label="Efeito">
+      <button type="button" class="chip" data-mode="off" aria-pressed="false">Off</button>
+      <button type="button" class="chip" data-mode="rcas" aria-pressed="false">FSR1</button>
+      <button type="button" class="chip" data-mode="ravu" aria-pressed="false">RAVU<span class="badge">qual.</span></button>
+    </div>
+  </div>
+
+  <div class="field">
+    <div class="field-label">
+      <span>Intensidade</span>
+      <output id="strengthValue" for="strength">—</output>
+    </div>
+    <input id="strength" type="range" min="0" max="100" step="1" disabled>
+    <div class="chips" id="presetChips" role="group" aria-label="Presets de intensidade">
+      <button type="button" class="chip preset" data-strength="20" disabled>Suave</button>
+      <button type="button" class="chip preset" data-strength="35" disabled>Médio</button>
+      <button type="button" class="chip preset" data-strength="100" disabled>Forte</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <div class="field-label"><span>Qualidade</span></div>
+    <div class="chips" id="qualityChips" role="group" aria-label="Qualidade">
+      <button type="button" class="chip" data-quality="high" aria-pressed="false">100%</button>
+      <button type="button" class="chip" data-quality="balanced" aria-pressed="false">75%</button>
+      <button type="button" class="chip" data-quality="performance" aria-pressed="false">50%</button>
+      <button type="button" class="chip" data-quality="auto" aria-pressed="false">Auto</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <div class="field-label"><span>Durante navegação</span></div>
+    <div class="chips" id="interactionChips" role="group" aria-label="Durante navegação">
+      <button type="button" class="chip" data-interaction="smooth" aria-pressed="false">Fluidez</button>
+      <button type="button" class="chip" data-interaction="balanced" aria-pressed="false">Equilíbrio</button>
+      <button type="button" class="chip" data-interaction="quality" aria-pressed="false">Fidelidade</button>
+    </div>
+  </div>
+</div>
+
+<div class="actions">
+  <button type="button" class="primary" id="toggle" disabled>Ocultar overlay</button>
+  <button type="button" class="secondary" id="reload" disabled>Recarregar página</button>
+</div>
+
+<details class="advanced" id="advanced">
+  <summary>Avançado / Diagnóstico</summary>
+  <div class="advanced-body">
+    <label class="check">Contorno de teste <input id="outline" type="checkbox"></label>
+    <label class="check">Comparação 50/50 <input id="compare" type="checkbox"></label>
+    <div class="health">
+      <span>Saúde</span>
+      <strong id="health" data-tone="off">—</strong>
+    </div>
+    <dl class="metrics">
+      <dt>Vídeo / overlay</dt><dd id="fps">—</dd>
+      <dt>Escala interna</dt><dd id="renderScale">—</dd>
+      <dt>Overlay não desenhado</dt><dd id="missed">—</dd>
+      <dt>Vídeo descartado</dt><dd id="videoDropped">—</dd>
+      <dt>Callbacks atrasados</dt><dd id="late">—</dd>
+      <dt>CPU por frame</dt><dd id="cpu">—</dd>
+      <dt>GPU upload + efeito</dt><dd id="gpu">—</dd>
+      <dt>Decode</dt><dd id="decoder">—</dd>
+    </dl>
+  </div>
+</details>
+
+<small class="hint" id="hint">RAVU-lite é o modo de qualidade. FSR1 é o modo leve.</small>
+<script src="popup.js"></script>
