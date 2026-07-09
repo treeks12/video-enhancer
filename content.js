@@ -428,6 +428,8 @@ let fiRealDrawsWindow = 0;
 let fiMidPerSec = 0;
 let fiRealPerSec = 0;
 let fiLastExplain = "";
+let fiLastRealCpuMs = 0;
+let fiSkipReason = ""; // why mid was not presented (smoothness)
 
 function log(...args) {
   console.log(TAG, ...args);
@@ -707,30 +709,64 @@ function fiExplainStatus() {
   if (!settings.fiInfra) {
     return "Suavização desligada. Use o interruptor “Suavizar movimento” para tentar 2× em vídeos 24/30 fps.";
   }
+  if (settings.mode === "ravu") {
+    return "Com RAVU ligado, os meios 2× ficam desativados de propósito: RAVU já é pesado e um meio “barato” no meio causa stutter (nitidez oscila). Use FSR1 + suavização, ou só RAVU sem 2×.";
+  }
   if (settings.fiFpsGate && !fiFpsEligibleSticky) {
-    return `Fonte ~${(metricReport.videoFps || 0).toFixed(0)} fps: 2× não se aplica (só ~24/30). Não espere efeito de soap-opera.`;
+    return `Fonte ~${(metricReport.videoFps || 0).toFixed(0)} fps: 2× não se aplica (só ~24/30).`;
   }
   if (!fiHasPrev || !fiHasCurr) {
     return "Aguardando o segundo frame do vídeo para montar o par…";
   }
+  if (fiSkipReason) {
+    return fiSkipReason;
+  }
   const mids = fiMidPerSec;
   const reals = fiRealPerSec;
-  const methodPt = {
-    skip: "sem meios",
-    blend: "mistura (efeito fraco — fantasma leve)",
-    block: "movimento estimado (mais visível em pans)",
-    duplicate: "repete frame (não suaviza)",
-  }[fiMethod] || fiMethod;
   if (fiMethod === "skip") {
-    return "Infra ligada, mas o motor não está gerando meios agora.";
+    return "Infra ligada, sem meios neste momento (orçamento ou confiança).";
   }
-  if (mids < reals * 0.35 && reals > 5) {
-    return `Método: ${methodPt}. Meios quase não entram (${mids.toFixed(0)}/s vs ${reals.toFixed(0)} âncoras) — CPU alto; a imagem parece a mesma.`;
+  if (mids < 1 && reals > 5) {
+    return "Sem meios estáveis — priorizando cadência limpa em vez de forçar 2× engasgado.";
+  }
+  return `Meios de movimento ~${mids.toFixed(0)}/s · âncoras ~${reals.toFixed(0)}/s · confiança ${(fiConfidence * 100).toFixed(0)}%. Se engasgar, desligue a suavização ou use FSR1.`;
+}
+
+/**
+ * Smoothness-first gate: only present a mid when it is likely to help, not hurt.
+ * - No mid under RAVU (quality flicker + CPU).
+ * - No blend/duplicate mids (ghosting feels like stutter).
+ * - No mid if last real frame already ate the frame budget.
+ */
+function fiShouldPresentMid() {
+  fiSkipReason = "";
+  if (!settings.fiInfra || fiMethod === "skip") return false;
+  if (!fiHasPrev || !fiHasCurr) return false;
+  if (settings.fiFpsGate && !fiFpsEligibleSticky) {
+    fiSkipReason = "Fonte fora da faixa 24/30 — meios não agendados.";
+    return false;
+  }
+  if (settings.mode === "ravu") {
+    fiSkipReason =
+      "RAVU + meio-frame = engasgo. Meios desligados; mantenha só RAVU ou troque para FSR1 + suavização.";
+    return false;
   }
   if (fiMethod === "blend" || fiMethod === "duplicate") {
-    return `Método: ${methodPt}. Confiança ${(fiConfidence * 100).toFixed(0)}%. Em muita cena o olho mal nota. Em Avançado: desligue “Fallback” para forçar block match.`;
+    fiSkipReason =
+      `Confiança ${(fiConfidence * 100).toFixed(0)}% → mistura/cópia engasga mais do que ajuda; meio ignorado. ` +
+      "Em Avançado, desligue “Fallback” para tentar só block match, ou aceite 24 fps limpo.";
+    return false;
   }
-  return `Método: ${methodPt}. Meios ~${mids.toFixed(0)}/s · âncoras ~${reals.toFixed(0)}/s · confiança ${(fiConfidence * 100).toFixed(0)}%.`;
+  if (fiMethod !== "block") return false;
+  const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
+  const budget = 1000 / fps;
+  // Real frame must leave headroom for a cheap mid before the next anchor.
+  if (fiLastRealCpuMs > budget * 0.42) {
+    fiSkipReason =
+      `Último frame real ${fiLastRealCpuMs.toFixed(1)} ms (orçamento ~${budget.toFixed(0)} ms) — meio cancelado para não engasgar.`;
+    return false;
+  }
+  return true;
 }
 
 function publishMetrics(now) {
@@ -1159,22 +1195,29 @@ function fiAfterVideoUpload(video) {
 
 function fiScheduleMidFrame() {
   cancelFiMid();
-  if (!settings.fiInfra || !canRender() || fiMethod === "skip") return;
-  if (!fiHasPrev || !fiHasCurr) return;
-  // blend/block/duplicate all produce a mid; only skip aborts.
+  if (!canRender() || !fiShouldPresentMid()) return;
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
-  const delay = Math.max(4, Math.min(28, 450 / fps));
-  fiMidTimer = setTimeout(() => {
-    fiMidTimer = null;
-    if (!settings.fiInfra || !canRender() || fiMethod === "skip") return;
-    fiDrawingMid = true;
-    try {
-      // Mid path is lightweight (no full RAVU) so 2× can actually land under load.
-      draw({ fiMid: true, fiLight: true });
-    } finally {
-      fiDrawingMid = false;
-    }
-  }, delay);
+  // Place mid near half-interval, but never so late that it collides with the next rVFC.
+  const delay = Math.max(3, Math.min(18, 400 / fps));
+  const scheduledMethod = fiMethod;
+  fiMidRaf = requestAnimationFrame(() => {
+    fiMidRaf = null;
+    if (!canRender() || !settings.fiInfra) return;
+    // Second leg: timeout only if we still have time before next typical anchor.
+    fiMidTimer = setTimeout(() => {
+      fiMidTimer = null;
+      if (!canRender() || !settings.fiInfra) return;
+      if (scheduledMethod !== "block" || fiMethod === "skip") return;
+      // If a new real frame already arrived, pair state advanced — abort stale mid.
+      if (!fiHasPrev || !fiHasCurr) return;
+      fiDrawingMid = true;
+      try {
+        draw({ fiMid: true, fiLight: true });
+      } finally {
+        fiDrawingMid = false;
+      }
+    }, Math.max(0, delay - 4));
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -1549,6 +1592,8 @@ function draw(options = {}) {
   if (stopped || !canRender() ||
       !currentVideo || !gl || !canvas.parentNode) return;
   const isFiMid = options.fiMid === true;
+  // Never let a pending mid fire across a new real frame (stale/janky).
+  if (!isFiMid) cancelFiMid();
   if (settings.mode === "ravu" &&
       (!ravuLutReady || !ravuStepProgram || !ravuComposeProgram)) {
     const ravuError = ravuShaderError || ravuLutError;
@@ -1633,7 +1678,8 @@ function draw(options = {}) {
         gpuQueries.push(gpuQuery);
       }
       updateCanvasDataset(activePipeline, "");
-      recordDraw(measureCpu ? performance.now() - cpuStart : null);
+      const midCpu = measureCpu ? performance.now() - cpuStart : null;
+      recordDraw(midCpu);
       fiMidDrawsWindow++;
       if (status !== "ok") {
         status = "ok";
@@ -1793,9 +1839,15 @@ function draw(options = {}) {
     gpuQueries.push(gpuQuery);
   }
   updateCanvasDataset(activePipeline, "");
-  recordDraw(measureCpu ? performance.now() - cpuStart : null);
-  if (isFiMid) fiMidDrawsWindow++;
-  else fiRealDrawsWindow++;
+  const cpuMs = measureCpu ? performance.now() - cpuStart : null;
+  recordDraw(cpuMs);
+  if (isFiMid) {
+    fiMidDrawsWindow++;
+  } else {
+    fiRealDrawsWindow++;
+    if (cpuMs != null) fiLastRealCpuMs = cpuMs;
+    else if (metricReport.cpuMs > 0) fiLastRealCpuMs = metricReport.cpuMs;
+  }
 
   if (status !== "ok") {
     status = "ok";

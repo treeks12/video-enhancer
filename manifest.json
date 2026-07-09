@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Firefox Video Enhancer",
-  "version": "0.0.38",
+  "version": "0.0.39",
   "description": "Aplica FSR1 ou RAVU-lite + RCAS ao vídeo principal usando WebGL2, com FI experimental 2×.",
   "browser_specific_settings": {
     "gecko": {
