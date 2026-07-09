@@ -252,10 +252,12 @@ void main() {
   vec2 cell = clamp(floor(v_uv * u_mv_grid), vec2(0.0), u_mv_grid - 1.0);
   vec2 mvUv = (cell + 0.5) / u_mv_grid;
   // Packed as (pixel*4 + 128) / 255 in RG — decode back to source pixels.
+  // ME defines mv so curr[p+mv] ≈ prev[p] (feature moves +mv from prev→curr).
+  // Mid at phase t: sample prev at p - mv*t, curr at p + mv*(1-t).
   vec2 mv = (texture(u_mv, mvUv).rg * 255.0 - 128.0) / 4.0;
   float t = clamp(u_phase, 0.0, 1.0);
-  vec2 fromPrev = v_uv + mv * t * u_texel;
-  vec2 fromCurr = v_uv - mv * (1.0 - t) * u_texel;
+  vec2 fromPrev = v_uv - mv * t * u_texel;
+  vec2 fromCurr = v_uv + mv * (1.0 - t) * u_texel;
   vec3 a = texture(u_prev, clamp(fromPrev, vec2(0.0), vec2(1.0))).rgb;
   vec3 b = texture(u_curr, clamp(fromCurr, vec2(0.0), vec2(1.0))).rgb;
   outColor = vec4(mix(a, b, t), 1.0);
@@ -397,6 +399,7 @@ let fiCurrTexture = null;
 let fiOutTexture = null;
 let fiMvTexture = null;
 let fiOutFb = null;
+let fiCopyFb = null; // dedicated FBO for texture copies — never share with fiOutFb
 let fiHasPrev = false;
 let fiHasCurr = false;
 let fiPrevLuma = null;
@@ -867,29 +870,36 @@ function fiEnsurePrograms() {
   return true;
 }
 
-function fiEnsureOut(w, h) {
-  if (!fiOutTexture) fiOutTexture = fiMakeTexture();
-  if (!fiOutFb) fiOutFb = gl.createFramebuffer();
-  if (fiOutW === w && fiOutH === h) return true;
-  gl.bindTexture(gl.TEXTURE_2D, fiOutTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+function fiBindOutTarget() {
+  if (!fiOutFb || !fiOutTexture) return false;
   gl.bindFramebuffer(gl.FRAMEBUFFER, fiOutFb);
   gl.framebufferTexture2D(
     gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fiOutTexture, 0,
   );
-  const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  return gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+}
+
+function fiEnsureOut(w, h) {
+  if (!fiOutTexture) fiOutTexture = fiMakeTexture();
+  if (!fiOutFb) fiOutFb = gl.createFramebuffer();
+  if (fiOutW !== w || fiOutH !== h) {
+    gl.bindTexture(gl.TEXTURE_2D, fiOutTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    fiOutW = w;
+    fiOutH = h;
+  }
+  // Always re-attach: fiCopyTexture must never leave this FBO pointing at video tex.
+  const ok = fiBindOutTarget();
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  if (!ok) return false;
-  fiOutW = w;
-  fiOutH = h;
-  return true;
+  return ok;
 }
 
 function fiCopyTexture(src, dst, w, h) {
-  if (!fiOutFb) fiOutFb = gl.createFramebuffer();
+  // Use a dedicated copy FBO so COLOR_ATTACHMENT0 on fiOutFb always stays fiOutTexture.
+  if (!fiCopyFb) fiCopyFb = gl.createFramebuffer();
   gl.bindTexture(gl.TEXTURE_2D, dst);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fiOutFb);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fiCopyFb);
   gl.framebufferTexture2D(
     gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, src, 0,
   );
@@ -1042,7 +1052,11 @@ function fiRenderMidToOut(phase) {
   if (!w || !h || !fiEnsureOut(w, h)) return false;
 
   const method = fiMethod;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fiOutFb);
+  // Re-bind every mid draw so attachment is never the video texture after a copy.
+  if (!fiBindOutTarget()) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return false;
+  }
   gl.viewport(0, 0, w, h);
   gl.bindVertexArray(vao);
 
@@ -2263,6 +2277,23 @@ function selfCheck() {
     throw new Error("selfCheck: defaults FI incorretos");
   }
   if (typeof fiSelfCheck === "function") fiSelfCheck();
+  // Shipped warp shader must use ME-correct sampling (not inverted).
+  if (!FI_WARP_FRAG.includes("v_uv - mv * t * u_texel") ||
+      !FI_WARP_FRAG.includes("v_uv + mv * (1.0 - t) * u_texel") ||
+      /fromPrev = v_uv \+ mv \* t/.test(FI_WARP_FRAG)) {
+    throw new Error("selfCheck: FI_WARP_FRAG motion sampling direction wrong");
+  }
+  // FBO separation: copy binds fiCopyFb; mid path re-binds out target every time.
+  const copySrc = String(fiCopyTexture);
+  if (!copySrc.includes("fiCopyFb") ||
+      !/bindFramebuffer\(\s*gl\.FRAMEBUFFER\s*,\s*fiCopyFb\s*\)/.test(copySrc) ||
+      /bindFramebuffer\(\s*gl\.FRAMEBUFFER\s*,\s*fiOutFb\s*\)/.test(copySrc)) {
+    throw new Error("selfCheck: fiCopyTexture must bind fiCopyFb, not fiOutFb");
+  }
+  if (!String(fiEnsureOut).includes("fiBindOutTarget") ||
+      !String(fiRenderMidToOut).includes("fiBindOutTarget")) {
+    throw new Error("selfCheck: mid-out path must re-bind fiOutTexture via fiBindOutTarget");
+  }
 
   const severe = selectAutoScale(1, 0, {
     videoFps: 60, missed: 8, missedPct: 12, latePct: 0,

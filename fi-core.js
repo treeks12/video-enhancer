@@ -159,6 +159,22 @@ function fiHierarchicalBlockMatch(prev, curr, w, h, options = {}) {
 }
 
 /**
+ * Warp sample offsets in UV space for a motion vector (source pixels → UV via texel).
+ * ME finds mv such that curr[p+mv] ≈ prev[p]. Mid phase t∈[0,1]:
+ *   fromPrev = p - mv*t, fromCurr = p + mv*(1-t).
+ * @returns {{ fromPrevX: number, fromPrevY: number, fromCurrX: number, fromCurrY: number }}
+ */
+function fiWarpSampleOffsets(uvX, uvY, mvX, mvY, texelX, texelY, phase) {
+  const t = Math.max(0, Math.min(1, Number(phase) || 0));
+  return {
+    fromPrevX: uvX - mvX * t * texelX,
+    fromPrevY: uvY - mvY * t * texelY,
+    fromCurrX: uvX + mvX * (1 - t) * texelX,
+    fromCurrY: uvY + mvY * (1 - t) * texelY,
+  };
+}
+
+/**
  * Pick presentation method for the mid frame.
  * @returns {"skip"|"duplicate"|"blend"|"block"}
  */
@@ -293,6 +309,37 @@ function fiSelfCheck() {
   }
   if (fiNormalizeSettings({ fiInfra: true, fiSceneCut: false }).fiSceneCut !== false) {
     throw new Error("fiSelfCheck: normalize explicit false failed");
+  }
+
+  // Feature at prev uv=0.5 moves +8px on a 32px-wide image (texel=1/32).
+  // At t=0.5, prev sample should look left (−), curr sample right (+).
+  const warp = fiWarpSampleOffsets(0.5, 0.5, 8, 0, 1 / 32, 1 / 32, 0.5);
+  if (!(warp.fromPrevX < 0.5 && warp.fromCurrX > 0.5)) {
+    throw new Error(
+      "fiSelfCheck: warp offsets inverted " +
+      JSON.stringify(warp),
+    );
+  }
+  const at0 = fiWarpSampleOffsets(0.5, 0.5, 8, 0, 1 / 32, 1 / 32, 0);
+  if (Math.abs(at0.fromPrevX - 0.5) > 1e-9 || Math.abs(at0.fromCurrX - 0.5 - 8 / 32) > 1e-9) {
+    throw new Error("fiSelfCheck: warp phase 0 wrong " + JSON.stringify(at0));
+  }
+  // Shader source must match pure helper (shipped string in content.js when co-loaded).
+  if (typeof FI_WARP_FRAG === "string") {
+    if (!FI_WARP_FRAG.includes("v_uv - mv * t * u_texel") ||
+        !FI_WARP_FRAG.includes("v_uv + mv * (1.0 - t) * u_texel")) {
+      throw new Error("fiSelfCheck: FI_WARP_FRAG sampling direction mismatch");
+    }
+    if (FI_WARP_FRAG.includes("v_uv + mv * t * u_texel")) {
+      throw new Error("fiSelfCheck: FI_WARP_FRAG still has inverted fromPrev");
+    }
+  }
+  // FBO helpers: pure contract for separate copy vs out (names must exist when content loaded)
+  if (typeof fiCopyTexture === "function" && typeof fiBindOutTarget === "function") {
+    // When content.js is loaded, structural check only — cannot allocate GL in node.
+    if (typeof fiCopyFb === "undefined" && typeof fiOutFb === "undefined") {
+      // state vars are lets in content scope when co-run; optional
+    }
   }
 
   console.log("[fv-fi] fiSelfCheck OK");
