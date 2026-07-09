@@ -7,6 +7,12 @@ const strength = document.querySelector("#strength");
 const strengthValue = document.querySelector("#strengthValue");
 const outline = document.querySelector("#outline");
 const compare = document.querySelector("#compare");
+const fiInfra = document.querySelector("#fiInfra");
+const fiSceneCut = document.querySelector("#fiSceneCut");
+const fiFpsGate = document.querySelector("#fiFpsGate");
+const fiHalfLuma = document.querySelector("#fiHalfLuma");
+const fiBlockMatch = document.querySelector("#fiBlockMatch");
+const fiFallback = document.querySelector("#fiFallback");
 const toggle = document.querySelector("#toggle");
 const reload = document.querySelector("#reload");
 const hint = document.querySelector("#hint");
@@ -20,10 +26,16 @@ const cpu = document.querySelector("#cpu");
 const gpu = document.querySelector("#gpu");
 const decoder = document.querySelector("#decoder");
 const renderScale = document.querySelector("#renderScale");
+const fiMethodEl = document.querySelector("#fiMethod");
+const fiEligibleEl = document.querySelector("#fiEligible");
+const fiConfidenceEl = document.querySelector("#fiConfidence");
+const fiHoldEl = document.querySelector("#fiHold");
+const fiSampleEl = document.querySelector("#fiSample");
 const modeChips = [...document.querySelectorAll("#modeChips .chip")];
 const qualityChips = [...document.querySelectorAll("#qualityChips .chip")];
 const interactionChips = [...document.querySelectorAll("#interactionChips .chip")];
 const presetChips = [...document.querySelectorAll("#presetChips .chip")];
+const fiChecks = [fiInfra, fiSceneCut, fiFpsGate, fiHalfLuma, fiBlockMatch, fiFallback];
 
 let tabId;
 let controlsLocked = false;
@@ -153,6 +165,19 @@ function render(state) {
   outline.checked = state.settings.outline;
   compare.checked = state.settings.compare;
 
+  fiInfra.checked = state.settings.fiInfra === true;
+  fiSceneCut.checked = state.settings.fiSceneCut !== false;
+  fiFpsGate.checked = state.settings.fiFpsGate !== false;
+  fiHalfLuma.checked = state.settings.fiHalfLuma !== false;
+  fiBlockMatch.checked = state.settings.fiBlockMatch !== false;
+  fiFallback.checked = state.settings.fiFallback !== false;
+  for (const el of fiChecks) el.disabled = false;
+  fiSceneCut.disabled = !fiInfra.checked;
+  fiFpsGate.disabled = !fiInfra.checked;
+  fiHalfLuma.disabled = !fiInfra.checked;
+  fiBlockMatch.disabled = !fiInfra.checked;
+  fiFallback.disabled = !fiInfra.checked;
+
   toggle.disabled = state.settings.mode === "off" ||
     !state.hasVideo || state.status !== "ok";
   toggle.textContent = state.visible ? "Ocultar overlay" : "Mostrar overlay";
@@ -163,6 +188,20 @@ function render(state) {
 
   fps.textContent = `${state.metrics.videoFps.toFixed(1)} / ${state.metrics.fps.toFixed(1)} fps`;
   renderScale.textContent = `${Math.round(state.metrics.renderScale * 100)}%`;
+  const fi = state.fi || {};
+  fiMethodEl.textContent = state.settings.fiInfra
+    ? (fi.method || "—")
+    : "off";
+  fiEligibleEl.textContent = state.settings.fiInfra
+    ? `${fi.fpsEligible ? "sim" : "não"} (${(fi.videoFps || 0).toFixed(1)} fps)`
+    : "—";
+  fiConfidenceEl.textContent = state.settings.fiInfra && fi.confidence != null
+    ? `${(fi.confidence * 100).toFixed(0)}%`
+    : "—";
+  fiHoldEl.textContent = state.settings.fiInfra
+    ? `${fi.sceneCutHold || 0} / ${fi.hasPair ? "par ok" : "sem par"}`
+    : "—";
+  fiSampleEl.textContent = fi.sample || "—";
   missed.textContent = `${state.metrics.missed} (${state.metrics.missedPct.toFixed(1)}%)`;
   videoDropped.textContent =
     `${state.metrics.videoDropped} (${state.metrics.videoDroppedPct.toFixed(1)}%)`;
@@ -203,6 +242,9 @@ function unavailable() {
   strength.disabled = true;
   outline.disabled = true;
   compare.disabled = true;
+  for (const el of fiChecks) {
+    if (el) el.disabled = true;
+  }
   toggle.disabled = true;
   setChipDisabled(modeChips, true);
   setChipDisabled(qualityChips, true);
@@ -261,6 +303,22 @@ outline.addEventListener("change", () => {
 compare.addEventListener("change", () => {
   updateSettings({ compare: compare.checked }).catch(unavailable);
 });
+
+function fiPatchFromUi() {
+  return {
+    fiInfra: fiInfra.checked,
+    fiSceneCut: fiSceneCut.checked,
+    fiFpsGate: fiFpsGate.checked,
+    fiHalfLuma: fiHalfLuma.checked,
+    fiBlockMatch: fiBlockMatch.checked,
+    fiFallback: fiFallback.checked,
+  };
+}
+for (const el of fiChecks) {
+  el.addEventListener("change", () => {
+    updateSettings(fiPatchFromUi()).catch(unavailable);
+  });
+}
 
 toggle.addEventListener("click", async () => {
   try {

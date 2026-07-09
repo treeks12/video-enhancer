@@ -52,11 +52,28 @@ const DEFAULT_SETTINGS = Object.freeze({
   compare: false,
   quality: "high",
   interaction: "smooth",
+  // Frame interpolation (A/B toggles). Defaults: infra off; sub-options ready.
+  fiInfra: false,
+  fiSceneCut: true,
+  fiFpsGate: true,
+  fiHalfLuma: true,
+  fiBlockMatch: true,
+  fiFallback: true,
 });
 
 function normalizeSettings(value = {}) {
   const strength = Number(value.strength);
   const mode = value.mode === "passthrough" ? "off" : value.mode;
+  const fi = typeof fiNormalizeSettings === "function"
+    ? fiNormalizeSettings(value)
+    : {
+      fiInfra: value.fiInfra === true,
+      fiSceneCut: value.fiSceneCut !== false,
+      fiFpsGate: value.fiFpsGate !== false,
+      fiHalfLuma: value.fiHalfLuma !== false,
+      fiBlockMatch: value.fiBlockMatch !== false,
+      fiFallback: value.fiFallback !== false,
+    };
   return {
     mode: ["off", "rcas", "ravu"].includes(mode) ? mode : DEFAULT_SETTINGS.mode,
     strength: Number.isFinite(strength)
@@ -70,6 +87,7 @@ function normalizeSettings(value = {}) {
     interaction: ["smooth", "balanced", "quality"].includes(value.interaction)
       ? value.interaction
       : DEFAULT_SETTINGS.interaction,
+    ...fi,
   };
 }
 
@@ -206,6 +224,43 @@ void main() {
   outColor = vec4(clamp(color / weight, minimum, maximum), 1.0);
 }`;
 
+const FI_BLEND_FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D u_prev;
+uniform sampler2D u_curr;
+uniform float u_phase;
+in vec2 v_uv;
+out vec4 outColor;
+void main() {
+  vec3 a = texture(u_prev, v_uv).rgb;
+  vec3 b = texture(u_curr, v_uv).rgb;
+  outColor = vec4(mix(a, b, clamp(u_phase, 0.0, 1.0)), 1.0);
+}`;
+
+const FI_WARP_FRAG = `#version 300 es
+precision highp float;
+uniform sampler2D u_prev;
+uniform sampler2D u_curr;
+uniform sampler2D u_mv;
+uniform vec2 u_texel;
+uniform vec2 u_mv_grid;
+uniform float u_phase;
+in vec2 v_uv;
+out vec4 outColor;
+void main() {
+  // MV texture: RG = motion of curr relative to prev, in source pixels.
+  vec2 cell = clamp(floor(v_uv * u_mv_grid), vec2(0.0), u_mv_grid - 1.0);
+  vec2 mvUv = (cell + 0.5) / u_mv_grid;
+  // Packed as (pixel*4 + 128) / 255 in RG — decode back to source pixels.
+  vec2 mv = (texture(u_mv, mvUv).rg * 255.0 - 128.0) / 4.0;
+  float t = clamp(u_phase, 0.0, 1.0);
+  vec2 fromPrev = v_uv + mv * t * u_texel;
+  vec2 fromCurr = v_uv - mv * (1.0 - t) * u_texel;
+  vec3 a = texture(u_prev, clamp(fromPrev, vec2(0.0), vec2(1.0))).rgb;
+  vec3 b = texture(u_curr, clamp(fromCurr, vec2(0.0), vec2(1.0))).rgb;
+  outColor = vec4(mix(a, b, t), 1.0);
+}`;
+
 const FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D u_tex;
@@ -333,6 +388,38 @@ let metricReport = {
   cpuMs: 0, cpuMaxMs: 0, gpuMs: null, decoderMs: null,
   renderScale: 1,
 };
+
+// --------------------------------------------------------------------------
+// Frame interpolation state (GL + CPU). Pure decisions live in fi-core.js.
+// --------------------------------------------------------------------------
+let fiPrevTexture = null;
+let fiCurrTexture = null;
+let fiOutTexture = null;
+let fiMvTexture = null;
+let fiOutFb = null;
+let fiHasPrev = false;
+let fiHasCurr = false;
+let fiPrevLuma = null;
+let fiCurrLuma = null;
+let fiLumaW = 0;
+let fiLumaH = 0;
+let fiSampleCanvas = null;
+let fiSampleCtx = null;
+let fiMidTimer = null;
+let fiMidRaf = null;
+let fiMethod = "skip";
+let fiConfidence = 0;
+let fiSceneCutHold = 0;
+let fiFpsEligible = false;
+let fiFpsEligibleSticky = false;
+let fiLastMatch = null;
+let fiBlendProgram = null;
+let fiWarpProgram = null;
+let fiBlendPrevLoc = null, fiBlendCurrLoc = null, fiBlendPhaseLoc = null;
+let fiWarpPrevLoc = null, fiWarpCurrLoc = null, fiWarpMvLoc = null;
+let fiWarpTexelLoc = null, fiWarpGridLoc = null, fiWarpPhaseLoc = null;
+let fiOutW = 0, fiOutH = 0;
+let fiDrawingMid = false;
 
 function log(...args) {
   console.log(TAG, ...args);
@@ -720,6 +807,320 @@ function pollGpuTimers() {
   }
 }
 
+function cancelFiMid() {
+  if (fiMidTimer !== null) {
+    clearTimeout(fiMidTimer);
+    fiMidTimer = null;
+  }
+  if (fiMidRaf !== null) {
+    cancelAnimationFrame(fiMidRaf);
+    fiMidRaf = null;
+  }
+}
+
+function resetFiPairState() {
+  cancelFiMid();
+  fiHasPrev = false;
+  fiHasCurr = false;
+  fiPrevLuma = null;
+  fiCurrLuma = null;
+  fiLumaW = 0;
+  fiLumaH = 0;
+  fiMethod = "skip";
+  fiConfidence = 0;
+  fiSceneCutHold = 0;
+  fiLastMatch = null;
+  fiDrawingMid = false;
+}
+
+function fiMakeTexture() {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  return tex;
+}
+
+function fiEnsurePrograms() {
+  if (fiBlendProgram && fiWarpProgram) return true;
+  fiBlendProgram = linkProgram(VERT_PLAIN, FI_BLEND_FRAG);
+  fiWarpProgram = linkProgram(VERT_PLAIN, FI_WARP_FRAG);
+  if (!fiBlendProgram || !fiWarpProgram) return false;
+  fiBlendPrevLoc = gl.getUniformLocation(fiBlendProgram, "u_prev");
+  fiBlendCurrLoc = gl.getUniformLocation(fiBlendProgram, "u_curr");
+  fiBlendPhaseLoc = gl.getUniformLocation(fiBlendProgram, "u_phase");
+  fiWarpPrevLoc = gl.getUniformLocation(fiWarpProgram, "u_prev");
+  fiWarpCurrLoc = gl.getUniformLocation(fiWarpProgram, "u_curr");
+  fiWarpMvLoc = gl.getUniformLocation(fiWarpProgram, "u_mv");
+  fiWarpTexelLoc = gl.getUniformLocation(fiWarpProgram, "u_texel");
+  fiWarpGridLoc = gl.getUniformLocation(fiWarpProgram, "u_mv_grid");
+  fiWarpPhaseLoc = gl.getUniformLocation(fiWarpProgram, "u_phase");
+  gl.useProgram(fiBlendProgram);
+  gl.uniform1i(fiBlendPrevLoc, 0);
+  gl.uniform1i(fiBlendCurrLoc, 1);
+  gl.useProgram(fiWarpProgram);
+  gl.uniform1i(fiWarpPrevLoc, 0);
+  gl.uniform1i(fiWarpCurrLoc, 1);
+  gl.uniform1i(fiWarpMvLoc, 2);
+  return true;
+}
+
+function fiEnsureOut(w, h) {
+  if (!fiOutTexture) fiOutTexture = fiMakeTexture();
+  if (!fiOutFb) fiOutFb = gl.createFramebuffer();
+  if (fiOutW === w && fiOutH === h) return true;
+  gl.bindTexture(gl.TEXTURE_2D, fiOutTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fiOutFb);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fiOutTexture, 0,
+  );
+  const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  if (!ok) return false;
+  fiOutW = w;
+  fiOutH = h;
+  return true;
+}
+
+function fiCopyTexture(src, dst, w, h) {
+  if (!fiOutFb) fiOutFb = gl.createFramebuffer();
+  gl.bindTexture(gl.TEXTURE_2D, dst);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fiOutFb);
+  gl.framebufferTexture2D(
+    gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, src, 0,
+  );
+  gl.bindTexture(gl.TEXTURE_2D, dst);
+  gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+
+function fiUpdateLumaSample(video) {
+  const srcW = video.videoWidth;
+  const srcH = video.videoHeight;
+  if (!srcW || !srcH) return;
+  let tw = srcW;
+  let th = srcH;
+  if (settings.fiHalfLuma) {
+    tw = Math.max(16, Math.round(srcW / 4));
+    th = Math.max(16, Math.round(srcH / 4));
+    // keep aspect-ish block grid friendly
+    tw = Math.max(16, tw - (tw % 8));
+    th = Math.max(16, th - (th % 8));
+  } else {
+    tw = Math.min(srcW, 320);
+    th = Math.min(srcH, 180);
+    tw = Math.max(16, tw - (tw % 8));
+    th = Math.max(16, th - (th % 8));
+  }
+  if (!fiSampleCanvas) {
+    fiSampleCanvas = document.createElement("canvas");
+    fiSampleCtx = fiSampleCanvas.getContext("2d", { willReadFrequently: true });
+  }
+  if (fiSampleCanvas.width !== tw || fiSampleCanvas.height !== th) {
+    fiSampleCanvas.width = tw;
+    fiSampleCanvas.height = th;
+  }
+  try {
+    fiSampleCtx.drawImage(video, 0, 0, tw, th);
+    const rgba = fiSampleCtx.getImageData(0, 0, tw, th).data;
+    const luma = typeof fiRgbaToLuma === "function"
+      ? fiRgbaToLuma(rgba, tw * th)
+      : new Float32Array(tw * th);
+    fiPrevLuma = fiCurrLuma;
+    fiCurrLuma = luma;
+    fiLumaW = tw;
+    fiLumaH = th;
+  } catch {
+    // tainted sample — skip CPU FI aids this frame
+  }
+}
+
+function fiUploadMvTexture(match) {
+  if (!match) return;
+  if (!fiMvTexture) {
+    fiMvTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, fiMvTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  }
+  const { gridW, gridH, mvs } = match;
+  // Pack mx,my into RG float via RGBA8 normalized ±32 px
+  const data = new Uint8Array(gridW * gridH * 4);
+  for (let i = 0, p = 0; i < gridW * gridH; i++, p += 4) {
+    const mx = mvs[i * 2];
+    const my = mvs[i * 2 + 1];
+    data[p] = Math.max(0, Math.min(255, Math.round(mx * 4 + 128)));
+    data[p + 1] = Math.max(0, Math.min(255, Math.round(my * 4 + 128)));
+    data[p + 2] = 0;
+    data[p + 3] = 255;
+  }
+  gl.bindTexture(gl.TEXTURE_2D, fiMvTexture);
+  gl.texImage2D(
+    gl.TEXTURE_2D, 0, gl.RGBA, gridW, gridH, 0, gl.RGBA, gl.UNSIGNED_BYTE, data,
+  );
+}
+
+function fiDecodeMvScale() {
+  // inverse of upload packing: (byte-128)/4 = pixels on luma grid
+  return 1 / 4;
+}
+
+function fiComputeDecision() {
+  const fps = metricReport.videoFps || 0;
+  fiFpsEligibleSticky = typeof fiFpsAllows2xSticky === "function"
+    ? fiFpsAllows2xSticky(fps, fiFpsEligibleSticky)
+    : (fps >= 20 && fps <= 34);
+  fiFpsEligible = typeof fiFpsAllows2x === "function"
+    ? fiFpsAllows2x(fps)
+    : fiFpsEligibleSticky;
+
+  let sceneCut = false;
+  let confidence = 0.5;
+  fiLastMatch = null;
+
+  if (fiPrevLuma && fiCurrLuma && fiPrevLuma.length === fiCurrLuma.length) {
+    const score = typeof fiSceneCutScore === "function"
+      ? fiSceneCutScore(fiPrevLuma, fiCurrLuma)
+      : 0;
+    if (settings.fiSceneCut && typeof fiIsSceneCut === "function" && fiIsSceneCut(score)) {
+      sceneCut = true;
+      fiSceneCutHold = 3;
+    } else if (fiSceneCutHold > 0) {
+      sceneCut = true;
+      fiSceneCutHold -= 1;
+    }
+
+    if (settings.fiBlockMatch && typeof fiHierarchicalBlockMatch === "function") {
+      fiLastMatch = fiHierarchicalBlockMatch(
+        fiPrevLuma, fiCurrLuma, fiLumaW, fiLumaH,
+        { block: 8, coarseRange: 4, refineRange: 2 },
+      );
+      confidence = fiLastMatch.confidence;
+      // Scale MVs from luma grid pixels to full video pixels
+      if (currentVideo && currentVideo.videoWidth && fiLumaW) {
+        const sx = currentVideo.videoWidth / fiLumaW;
+        const sy = currentVideo.videoHeight / fiLumaH;
+        for (let i = 0; i < fiLastMatch.mvs.length; i += 2) {
+          fiLastMatch.mvs[i] *= sx;
+          fiLastMatch.mvs[i + 1] *= sy;
+        }
+      }
+      fiUploadMvTexture(fiLastMatch);
+    }
+  } else if (fiSceneCutHold > 0) {
+    sceneCut = true;
+    fiSceneCutHold -= 1;
+  }
+
+  fiConfidence = confidence;
+  fiMethod = typeof fiPickMethod === "function"
+    ? fiPickMethod({
+      infra: settings.fiInfra,
+      fpsGate: settings.fiFpsGate,
+      fpsOk: fiFpsEligibleSticky,
+      sceneCutEnabled: settings.fiSceneCut,
+      sceneCut,
+      blockMatchEnabled: settings.fiBlockMatch,
+      fallbackEnabled: settings.fiFallback,
+      confidence,
+    })
+    : "skip";
+  return fiMethod;
+}
+
+function fiRenderMidToOut(phase) {
+  if (!fiHasPrev || !fiHasCurr || !fiPrevTexture || !fiCurrTexture) return false;
+  if (!fiEnsurePrograms()) return false;
+  const w = textureWidth;
+  const h = textureHeight;
+  if (!w || !h || !fiEnsureOut(w, h)) return false;
+
+  const method = fiMethod;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fiOutFb);
+  gl.viewport(0, 0, w, h);
+  gl.bindVertexArray(vao);
+
+  if (method === "duplicate") {
+    gl.useProgram(fiBlendProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, fiPrevTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, fiPrevTexture);
+    gl.uniform1f(fiBlendPhaseLoc, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  } else if (method === "block" && fiLastMatch && fiMvTexture) {
+    gl.useProgram(fiWarpProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, fiPrevTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, fiCurrTexture);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, fiMvTexture);
+    // u_texel multiplies mv (already in source pixels) → uv offset = mv * texel
+    gl.uniform2f(fiWarpTexelLoc, 1 / w, 1 / h);
+    gl.uniform2f(fiWarpGridLoc, fiLastMatch.gridW, fiLastMatch.gridH);
+    gl.uniform1f(fiWarpPhaseLoc, phase);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  } else {
+    // blend (default mid)
+    gl.useProgram(fiBlendProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, fiPrevTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, fiCurrTexture);
+    gl.uniform1f(fiBlendPhaseLoc, phase);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return true;
+}
+
+function fiAfterVideoUpload(video) {
+  if (!settings.fiInfra || !gl) return;
+  if (!fiPrevTexture) fiPrevTexture = fiMakeTexture();
+  if (!fiCurrTexture) fiCurrTexture = fiMakeTexture();
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (!w || !h) return;
+
+  if (fiHasCurr) {
+    // previous curr becomes prev
+    const tmp = fiPrevTexture;
+    fiPrevTexture = fiCurrTexture;
+    fiCurrTexture = tmp;
+    fiHasPrev = true;
+  }
+  // copy current video texture into fiCurrTexture
+  fiCopyTexture(texture, fiCurrTexture, w, h);
+  fiHasCurr = true;
+  fiUpdateLumaSample(video);
+  fiComputeDecision();
+}
+
+function fiScheduleMidFrame() {
+  cancelFiMid();
+  if (!settings.fiInfra || !canRender() || fiMethod === "skip") return;
+  if (!fiHasPrev || !fiHasCurr) return;
+  const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
+  const delay = Math.max(6, Math.min(40, 500 / fps));
+  fiMidTimer = setTimeout(() => {
+    fiMidTimer = null;
+    if (!settings.fiInfra || !canRender() || fiMethod === "skip") return;
+    fiDrawingMid = true;
+    try {
+      draw({ fiMid: true });
+    } finally {
+      fiDrawingMid = false;
+    }
+  }, delay);
+}
+
 // --------------------------------------------------------------------------
 // Overlay + GL
 // --------------------------------------------------------------------------
@@ -803,6 +1204,9 @@ function createOverlay() {
   framebuffer = gl.createFramebuffer();
 
   applyCanvasOutline(false);
+  fiEnsurePrograms();
+  if (!fiPrevTexture) fiPrevTexture = fiMakeTexture();
+  if (!fiCurrTexture) fiCurrTexture = fiMakeTexture();
   return true;
 }
 
@@ -1004,6 +1408,8 @@ function attachCanvasTo(video) {
 
 function deactivateRenderer() {
   cancelScheduledFrame();
+  cancelFiMid();
+  resetFiPairState();
   detachActivePageListeners();
   restoreVideoPaint();
   if (scrollResumeTimer !== null) clearTimeout(scrollResumeTimer);
@@ -1083,9 +1489,10 @@ function syncLayout() {
   layoutDirty = false;
 }
 
-function draw() {
+function draw(options = {}) {
   if (stopped || !canRender() ||
       !currentVideo || !gl || !canvas.parentNode) return;
+  const isFiMid = options.fiMid === true;
   if (settings.mode === "ravu" &&
       (!ravuLutReady || !ravuStepProgram || !ravuComposeProgram)) {
     const ravuError = ravuShaderError || ravuLutError;
@@ -1101,13 +1508,14 @@ function draw() {
       }
       removeCompareLabels();
       cancelScheduledFrame();
+      cancelFiMid();
     } else {
       loadRavuAssets().then((ready) => {
         if (ready && settings.mode === "ravu" && currentVideo) {
           updateCanvasVisibility();
-          draw();
+          draw(options);
         } else if (!ready && settings.mode === "ravu") {
-          draw();
+          draw(options);
         }
       });
     }
@@ -1121,8 +1529,6 @@ function draw() {
   if (currentVideo.videoWidth === 0 || currentVideo.videoHeight === 0) return;
 
   gl.bindVertexArray(vao);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
   pollGpuTimers();
   let gpuQuery = null;
   gpuFrame = (gpuFrame + 1) % 15;
@@ -1132,41 +1538,70 @@ function draw() {
     gl.beginQuery(timerExt.TIME_ELAPSED_EXT, gpuQuery);
   }
 
-  try {
-    if (textureWidth !== currentVideo.videoWidth || textureHeight !== currentVideo.videoHeight) {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, currentVideo);
-      textureWidth = currentVideo.videoWidth;
-      textureHeight = currentVideo.videoHeight;
+  let sourceTex = texture;
+  let fiTag = "";
+
+  if (isFiMid) {
+    if (!fiRenderMidToOut(0.5)) {
+      if (gpuQuery) {
+        gl.endQuery(timerExt.TIME_ELAPSED_EXT);
+        gl.deleteQuery(gpuQuery);
+      }
+      return;
+    }
+    sourceTex = fiOutTexture;
+    fiTag = ` · FI ${fiMethod}`;
+  } else {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    try {
+      if (textureWidth !== currentVideo.videoWidth || textureHeight !== currentVideo.videoHeight) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, currentVideo);
+        textureWidth = currentVideo.videoWidth;
+        textureHeight = currentVideo.videoHeight;
+      } else {
+        gl.texSubImage2D(
+          gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, currentVideo,
+        );
+      }
+    } catch (e) {
+      if (gpuQuery) {
+        gl.endQuery(timerExt.TIME_ELAPSED_EXT);
+        gl.deleteQuery(gpuQuery);
+      }
+      if (e && (e.name === "SecurityError" || /security/i.test(String(e && e.message)))) {
+        status = "tainted";
+        lastError = e.message || "CORS bloqueou o frame";
+        log("CORS bloqueou o acesso ao frame:", e.message);
+      } else {
+        status = "error";
+        lastError = String(e && (e.message || e));
+        log("texImage2D falhou inesperadamente:", e);
+      }
+      stop();
+      return;
+    }
+    if (settings.fiInfra) {
+      try {
+        fiAfterVideoUpload(currentVideo);
+      } catch (err) {
+        log("FI pair update failed:", err);
+        fiMethod = "skip";
+      }
     } else {
-      gl.texSubImage2D(
-        gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, currentVideo,
-      );
+      cancelFiMid();
+      fiMethod = "skip";
     }
-  } catch (e) {
-    if (gpuQuery) {
-      gl.endQuery(timerExt.TIME_ELAPSED_EXT);
-      gl.deleteQuery(gpuQuery);
-    }
-    if (e && (e.name === "SecurityError" || /security/i.test(String(e && e.message)))) {
-      status = "tainted";
-      lastError = e.message || "CORS bloqueou o frame";
-      log("CORS bloqueou o acesso ao frame:", e.message);
-    } else {
-      status = "error";
-      lastError = String(e && (e.message || e));
-      log("texImage2D falhou inesperadamente:", e);
-    }
-    stop();
-    return;
+    sourceTex = texture;
   }
+
+  const srcW = isFiMid ? fiOutW : currentVideo.videoWidth;
+  const srcH = isFiMid ? fiOutH : currentVideo.videoHeight;
 
   if (settings.mode === "ravu") {
     const rcasStrength = adjustedRcasStrength(
       settings.strength / 100,
-      Math.max(
-        canvas.width / currentVideo.videoWidth,
-        canvas.height / currentVideo.videoHeight,
-      ),
+      Math.max(canvas.width / srcW, canvas.height / srcH),
     );
     const useRcas = rcasStrength > 0;
     if (!ensureRavuIntermediate() || (useRcas && !ensureIntermediate())) {
@@ -1181,7 +1616,7 @@ function draw() {
     gl.viewport(0, 0, currentVideo.videoWidth, currentVideo.videoHeight);
     gl.useProgram(ravuStepProgram);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.bindTexture(gl.TEXTURE_2D, sourceTex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, ravuLutTexture);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1190,7 +1625,7 @@ function draw() {
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.useProgram(ravuComposeProgram);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.bindTexture(gl.TEXTURE_2D, sourceTex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, ravuPackedTexture);
     setRavuComposeUniforms(
@@ -1216,14 +1651,10 @@ function draw() {
       ? `RAVU-lite AR → RCAS${ravuFloatTarget ? "" : " (8-bit)"}`
       : `RAVU-lite AR${ravuFloatTarget ? "" : " (8-bit)"}`;
   } else {
-    const useEasu = canvas.width > currentVideo.videoWidth ||
-      canvas.height > currentVideo.videoHeight;
+    const useEasu = canvas.width > srcW || canvas.height > srcH;
     const rcasStrength = adjustedRcasStrength(
       settings.strength / 100,
-      Math.max(
-        canvas.width / currentVideo.videoWidth,
-        canvas.height / currentVideo.videoHeight,
-      ),
+      Math.max(canvas.width / srcW, canvas.height / srcH),
     );
     if (useEasu && !ensureIntermediate()) {
       if (gpuQuery) {
@@ -1238,7 +1669,7 @@ function draw() {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.useProgram(easuProgram);
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.bindTexture(gl.TEXTURE_2D, sourceTex);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1256,15 +1687,16 @@ function draw() {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.useProgram(program);
       gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.bindTexture(gl.TEXTURE_2D, sourceTex);
       setDirectUniforms(
-        1 / currentVideo.videoWidth, 1 / currentVideo.videoHeight,
+        1 / srcW, 1 / srcH,
         rcasStrength, settings.compare ? 1 : 0,
       );
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       activePipeline = "RCAS";
     }
   }
+  activePipeline += fiTag;
   if (gpuQuery) {
     gl.endQuery(timerExt.TIME_ELAPSED_EXT);
     gpuQueries.push(gpuQuery);
@@ -1279,6 +1711,7 @@ function draw() {
         currentVideo.clientWidth + "x" + currentVideo.clientHeight);
   }
   updateCanvasVisibility();
+  if (!isFiMid && settings.fiInfra) fiScheduleMidFrame();
 }
 
 // --------------------------------------------------------------------------
@@ -1354,6 +1787,7 @@ function cancelScheduledFrame(video = currentVideo) {
   }
   rafId = null;
   scheduledKind = null;
+  // mid-frame FI is independent of rVFC handle; cancel on full stop paths only
 }
 
 function scheduleLayoutSync() {
@@ -1569,6 +2003,13 @@ function applySettings(value) {
   const outlineChanged = settings.outline !== previous.outline;
   const compareChanged = settings.compare !== previous.compare;
   const interactionChanged = settings.interaction !== previous.interaction;
+  const fiChanged =
+    settings.fiInfra !== previous.fiInfra ||
+    settings.fiSceneCut !== previous.fiSceneCut ||
+    settings.fiFpsGate !== previous.fiFpsGate ||
+    settings.fiHalfLuma !== previous.fiHalfLuma ||
+    settings.fiBlockMatch !== previous.fiBlockMatch ||
+    settings.fiFallback !== previous.fiFallback;
 
   if (settings.mode === "off") {
     detachDiscoveryListeners();
@@ -1582,6 +2023,10 @@ function applySettings(value) {
   } else if (settings.quality === "auto" && previous.quality !== "auto") {
     stableWindows = 0;
     setRenderScale(1, "— modo automático reiniciado");
+  }
+  if (!settings.fiInfra || settings.fiInfra !== previous.fiInfra) {
+    cancelFiMid();
+    if (!settings.fiInfra) resetFiPairState();
   }
   if (canvas) {
     if (outlineChanged && flashTimer === null) applyCanvasOutline(false);
@@ -1603,12 +2048,13 @@ function applySettings(value) {
     rescan();
   } else if (modeChanged || qualityChanged) {
     activateRenderer();
-  } else if (interactionChanged) {
+  } else if (interactionChanged || fiChanged) {
     layoutDirty = true;
     resetMetricWindow(performance.now());
     updateCanvasVisibility();
     cancelScheduledFrame();
     schedule();
+    if (currentVideo) draw();
   } else if (visualChanged) {
     draw();
   }
@@ -1653,6 +2099,16 @@ function snapshot() {
     scheduler: schedulerMode === "video" ? "frame do vídeo" : "refresh da tela",
     settings: { ...settings },
     metrics: { ...metricReport, gpuSupported: Boolean(timerExt) },
+    fi: {
+      method: fiMethod,
+      confidence: fiConfidence,
+      fpsEligible: fiFpsEligibleSticky,
+      videoFps: metricReport.videoFps || 0,
+      sceneCutHold: fiSceneCutHold,
+      hasPair: fiHasPrev && fiHasCurr,
+      halfLuma: Boolean(settings.fiHalfLuma),
+      sample: fiLumaW && fiLumaH ? `${fiLumaW}×${fiLumaH}` : "—",
+    },
   };
 }
 
@@ -1691,6 +2147,7 @@ function suspendOverlayForInteraction() {
     scrolling = true;
     layoutDirty = true;
     cancelScheduledFrame();
+    cancelFiMid();
     updateCanvasVisibility();
     schedule();
   }
@@ -1707,6 +2164,8 @@ function suspendOverlayForInteraction() {
 function stop() {
   stopped = true;
   cancelScheduledFrame();
+  cancelFiMid();
+  resetFiPairState();
   restoreVideoPaint();
   detachActivePageListeners();
   detachDiscoveryListeners();
@@ -1800,6 +2259,10 @@ function selfCheck() {
   }
   scrolling = false;
   settings = normalizeSettings(DEFAULT_SETTINGS);
+  if (settings.fiInfra !== false || settings.fiSceneCut !== true) {
+    throw new Error("selfCheck: defaults FI incorretos");
+  }
+  if (typeof fiSelfCheck === "function") fiSelfCheck();
 
   const severe = selectAutoScale(1, 0, {
     videoFps: 60, missed: 8, missedPct: 12, latePct: 0,
@@ -1856,5 +2319,15 @@ function selfCheck() {
 if (typeof window !== "undefined" && window.document) {
   runSpike();
 } else {
+  // Node: load pure FI units so selfCheck can exercise shipped fi-core functions.
+  try {
+    const fs = require("fs");
+    const path = require("path");
+    const vm = require("vm");
+    const fiPath = path.join(__dirname, "fi-core.js");
+    vm.runInThisContext(fs.readFileSync(fiPath, "utf8"), { filename: fiPath });
+  } catch (error) {
+    console.warn("[fv-enhancer] não carregou fi-core.js no self-check:", error.message || error);
+  }
   selfCheck();
 }

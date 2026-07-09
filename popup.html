@@ -372,6 +372,15 @@
   <div class="advanced-body">
     <label class="check">Contorno de teste <input id="outline" type="checkbox"></label>
     <label class="check">Comparação 50/50 <input id="compare" type="checkbox"></label>
+
+    <div class="field-label" style="margin-top:4px"><span>Frame interpolation (A/B)</span></div>
+    <label class="check" title="Buffer t−1/t + meio-frame">1. Infra temporal <input id="fiInfra" type="checkbox"></label>
+    <label class="check" title="Detecta cortes e segura duplicate">2. Scene-cut <input id="fiSceneCut" type="checkbox"></label>
+    <label class="check" title="Só ~24/30 fps fonte">3. Gate 24/30 2× <input id="fiFpsGate" type="checkbox"></label>
+    <label class="check" title="ME em grade reduzida / luma">4. Half-res / luma <input id="fiHalfLuma" type="checkbox"></label>
+    <label class="check" title="Hierarchical block matching">5. Block match <input id="fiBlockMatch" type="checkbox"></label>
+    <label class="check" title="Confiança baixa → blend/duplicate">6. Fallback conf. <input id="fiFallback" type="checkbox"></label>
+
     <div class="health">
       <span>Saúde</span>
       <strong id="health" data-tone="off">—</strong>
@@ -379,6 +388,11 @@
     <dl class="metrics">
       <dt>Vídeo / overlay</dt><dd id="fps">—</dd>
       <dt>Escala interna</dt><dd id="renderScale">—</dd>
+      <dt>FI método</dt><dd id="fiMethod">—</dd>
+      <dt>FI elegível (fps)</dt><dd id="fiEligible">—</dd>
+      <dt>FI confiança</dt><dd id="fiConfidence">—</dd>
+      <dt>FI cut hold / par</dt><dd id="fiHold">—</dd>
+      <dt>FI sample</dt><dd id="fiSample">—</dd>
       <dt>Overlay não desenhado</dt><dd id="missed">—</dd>
       <dt>Vídeo descartado</dt><dd id="videoDropped">—</dd>
       <dt>Callbacks atrasados</dt><dd id="late">—</dd>
