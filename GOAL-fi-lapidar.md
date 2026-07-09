@@ -1,6 +1,6 @@
 # Goal: lapidar frame interpolation (6 opções)
 
-**Status:** pendente — rodar **depois** da implementação bruta e dos testes A/B do usuário.  
+**Status:** implementação v0.0.36 entregue (6 toggles + testes puros). Lapidação visual A/B e fica/descarta = usuário.  
 **Projeto:** `C:\Users\Filipe\ZCodeProject\firefox-video-enhancer`  
 **Contexto:** as 6 peças abaixo entram como flags testáveis; este goal é só a **fase de polimento**, não a primeira entrega.
 
