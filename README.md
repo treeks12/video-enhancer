@@ -8,7 +8,7 @@ Enhances the main video on a page locally with WebGL2:
 
 - FSR1 (EASU + RCAS) for upscaling and sharpening;
 - RAVU-lite + RCAS for adaptive reconstruction;
-- experimental frame interpolation for video near 24/30 fps.
+- experimental frame interpolation up to 2×.
 
 There is no telemetry or data collection. The only permission is `storage`, used to save local preferences.
 
@@ -17,7 +17,7 @@ There is no telemetry or data collection. The only permission is `storage`, used
 1. Download the ZIP for Firefox or Chromium from [Releases](https://github.com/treeks12/video-enhancer/releases).
 2. Install it from your browser's extension store. For local testing, use `about:debugging#/runtime/this-firefox` in Firefox or enable Developer mode and **Load unpacked** in Chromium browsers.
 3. Open a page with video, click the extension icon, and select Native, FSR1, or RAVU.
-4. Enable interpolation only if you want to test 2× output on sources near 24/30 fps.
+4. Enable interpolation only if you want to test output up to 2×.
 
 ## Known bugs
 

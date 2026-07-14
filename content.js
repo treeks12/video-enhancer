@@ -56,7 +56,6 @@ const DEFAULT_SETTINGS = Object.freeze({
   // Frame interpolation (A/B toggles). Defaults: infra off; sub-options ready.
   fiInfra: false,
   fiSceneCut: true,
-  fiFpsGate: true,
   fiHalfLuma: true,
   fiBlockMatch: true,
   fiFallback: true,
@@ -70,7 +69,6 @@ function normalizeSettings(value = {}) {
     : {
       fiInfra: value.fiInfra === true,
       fiSceneCut: value.fiSceneCut !== false,
-      fiFpsGate: value.fiFpsGate !== false,
       fiHalfLuma: value.fiHalfLuma !== false,
       fiBlockMatch: value.fiBlockMatch !== false,
       fiFallback: value.fiFallback !== false,
@@ -431,8 +429,6 @@ let fiMidRaf = null;
 let fiMethod = "skip";
 let fiConfidence = 0;
 let fiSceneCutHold = 0;
-let fiFpsEligible = false;
-let fiFpsEligibleSticky = false;
 let fiLastMatch = null;
 let fiLastBackwardMatch = null;
 let fiBlendProgram = null;
@@ -722,16 +718,22 @@ function shouldUseRavu(sourceW, sourceH, outputW, outputH, quality) {
   return quality === "high" || outputW > sourceW || outputH > sourceH;
 }
 
-function fiFrameDurationMs(expectedDeltaMs, mediaDeltaSeconds, presentedDelta, playbackRate) {
-  const frames = Math.max(1, Number(presentedDelta) || 1);
+function fiFrameDurationMs(expectedDeltaMs, mediaDeltaSeconds, playbackRate) {
   const rate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1;
   if (Number.isFinite(mediaDeltaSeconds) && mediaDeltaSeconds > 0 && mediaDeltaSeconds < 1) {
-    return mediaDeltaSeconds * 1000 / rate / frames;
+    return mediaDeltaSeconds * 1000 / rate;
   }
   if (Number.isFinite(expectedDeltaMs) && expectedDeltaMs > 0 && expectedDeltaMs <= 500) {
-    return expectedDeltaMs / frames;
+    return expectedDeltaMs;
   }
   return 0;
+}
+
+function fiMidBudgetMs(pairDurationMs, sourceFps) {
+  const duration = Number(pairDurationMs);
+  if (Number.isFinite(duration) && duration > 0) return duration / 2;
+  const fps = Number(sourceFps);
+  return 500 / (Number.isFinite(fps) && fps > 0 ? fps : 30);
 }
 
 function fiIsTimingGap(deltaMs, frameDurationMs) {
@@ -740,10 +742,6 @@ function fiIsTimingGap(deltaMs, frameDurationMs) {
     ? frameDurationMs
     : 1000 / 30;
   return deltaMs > Math.max(250, nominal * 3);
-}
-
-function fiLatencyEnabled(infra, fpsGate, fpsEligible, hasPair) {
-  return Boolean(infra && hasPair && (!fpsGate || fpsEligible));
 }
 
 function frameDrawKind(options = {}) {
@@ -758,7 +756,7 @@ function adaptRenderScale(report) {
     ...report,
     videoFps: fiOutputFps(
       report.videoFps,
-      settings.fiInfra && fiFpsEligibleSticky,
+      settings.fiInfra,
     ),
   });
   next.scale = Math.min(
@@ -774,10 +772,7 @@ function adaptRenderScale(report) {
 
 function fiExplainStatus() {
   if (!settings.fiInfra) {
-    return "Smoothing is off. Enable it to generate one midpoint per pair (up to 2×) for 24/30 fps video.";
-  }
-  if (settings.fiFpsGate && !fiFpsEligibleSticky) {
-    return `Source ~${(metricReport.videoFps || 0).toFixed(0)} fps: FI does not apply (only ~24/30).`;
+    return "Smoothing is off. Enable it to generate one midpoint per pair (up to 2×).";
   }
   if (!fiHasPrev || !fiHasCurr) {
     return "Waiting for the second video frame to build a pair…";
@@ -808,19 +803,14 @@ function fiShouldPresentMid() {
     return false;
   }
   if (!fiHasPrev || !fiHasCurr) return false;
-  if (settings.fiFpsGate && !fiFpsEligibleSticky) {
-    fiSkipReason = "Source is outside the 24/30 fps range — no midpoints scheduled.";
-    return false;
-  }
   if (fiMethod === "duplicate") {
     fiSkipReason = "Uncertain scene or motion — keeping the real cadence without duplicating the pipeline.";
     return false;
   }
   if (!["block", "blend"].includes(fiMethod)) return false;
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
-  const budget = 1000 / fiOutputFps(fps, true);
-  // Real frame must leave headroom for a mid + delayed anchor before the next pair.
-  if (fiLastRealCpuMs > budget * 0.75) {
+  const budget = fiMidBudgetMs(lastVideoFrameDurationMs, fps);
+  if (fiLastRealCpuMs > budget) {
     fiSkipReason =
       `Last real frame took ${fiLastRealCpuMs.toFixed(1)} ms (budget ~${budget.toFixed(0)} ms) — midpoint cancelled to avoid stutter.`;
     return false;
@@ -918,7 +908,7 @@ function recordVideoFrame(now, metadata) {
   // would jump current -> previous again and turn one miss into visible stutter.
   fiResumeGap = fiIsTimingGap(wallDelta, lastVideoFrameDurationMs);
   const duration = fiFrameDurationMs(
-    expectedDelta, mediaDelta, presentedDelta, playbackRate,
+    expectedDelta, mediaDelta, playbackRate,
   );
   if (!fiResumeGap && duration > 0) lastVideoFrameDurationMs = duration;
 
@@ -1188,21 +1178,12 @@ function fiDecodeMvScale() {
   return 1 / 4;
 }
 
-function fiUpdateFpsEligibility() {
-  const fps = metricReport.videoFps || 0;
-  fiFpsEligibleSticky = typeof fiFpsAllows2xSticky === "function"
-    ? fiFpsAllows2xSticky(fps, fiFpsEligibleSticky)
-    : (fps >= 20 && fps <= 34);
-  fiFpsEligible = typeof fiFpsAllows2x === "function"
-    ? fiFpsAllows2x(fps)
-    : fiFpsEligibleSticky;
-}
-
 function fiComputeDecision() {
   const fps = metricReport.videoFps || 0;
 
   let sceneCut = false;
   let confidence = 0.5;
+  let canBlockMatch = false;
   fiLastMatch = null;
   fiLastBackwardMatch = null;
 
@@ -1218,16 +1199,14 @@ function fiComputeDecision() {
       fiSceneCutHold -= 1;
     }
 
-    const fpsBudget = 1000 / fiOutputFps(fps || 30, true);
-    const hasBudget = !fiLastRealCpuMs || fiLastRealCpuMs < fpsBudget * 0.6;
-    if (!hasBudget) {
-      fiConfidence = 0;
-      fiMethod = "skip";
+    const hasBudget = !fiLastRealCpuMs ||
+      fiLastRealCpuMs < fiMidBudgetMs(lastVideoFrameDurationMs, fps);
+    canBlockMatch = settings.fiBlockMatch && hasBudget;
+    if (!hasBudget && !sceneCut) {
       fiSkipReason =
-        `Frame budget exceeded (${fiLastRealCpuMs.toFixed(1)} ms); skipping motion estimation.`;
-      return fiMethod;
+        `Motion estimation skipped (${fiLastRealCpuMs.toFixed(1)} ms); using blend.`;
     }
-    if (!sceneCut && settings.fiBlockMatch && hasBudget &&
+    if (!sceneCut && canBlockMatch &&
         typeof fiHierarchicalBlockMatch === "function") {
       // ponytail: bidirectional CPU match stays on the 160×90 sample; move this pair
       // to a WebGL pyramid only if capture p95 starts missing the frame budget.
@@ -1261,11 +1240,9 @@ function fiComputeDecision() {
   fiMethod = typeof fiPickMethod === "function"
     ? fiPickMethod({
       infra: settings.fiInfra,
-      fpsGate: settings.fiFpsGate,
-      fpsOk: fiFpsEligibleSticky,
       sceneCutEnabled: settings.fiSceneCut,
       sceneCut,
-      blockMatchEnabled: settings.fiBlockMatch,
+      blockMatchEnabled: canBlockMatch,
       fallbackEnabled: settings.fiFallback,
       confidence,
     })
@@ -1322,13 +1299,6 @@ function fiRenderMidToOut(phase) {
 function fiAfterVideoUpload(video) {
   if (!settings.fiInfra || !gl ||
       (scrolling && settings.interaction !== "quality")) return false;
-  fiUpdateFpsEligibility();
-  if (settings.fiFpsGate && !fiFpsEligibleSticky) {
-    if (fiHasCurr || fiLatencyActive) resetFiPairState();
-    fiMethod = "skip";
-    fiSkipReason = "Source is outside the 24/30 fps range — FI did not process this frame.";
-    return false;
-  }
   const w = video.videoWidth;
   const h = video.videoHeight;
   if (!w || !h) return false;
@@ -1904,10 +1874,7 @@ function draw(options = {}) {
         log("FI pair update failed:", err);
         fiMethod = "skip";
       }
-      const useLatency = fiLatencyEnabled(
-        settings.fiInfra, settings.fiFpsGate, fiFpsEligibleSticky,
-        fiHasPrev && fiHasCurr,
-      );
+      const useLatency = fiHasPrev && fiHasCurr;
       if (useLatency) {
         fiLatencyActive = true;
         sourceTex = fiPrevTexture;
@@ -2104,6 +2071,10 @@ function onFrame(now, metadata) {
   if (freshFrame) draw({ newVideoFrame: true, videoMetadata: metadata });
 }
 
+function frameSchedulerKind(fiEnabled, hasVideoFrameCallback) {
+  return fiEnabled && hasVideoFrameCallback ? "video" : "animation";
+}
+
 function schedule() {
   if (stopped || rafId !== null || !currentVideo || !canRender()) return;
   if (scrolling && settings.interaction === "balanced") {
@@ -2113,7 +2084,8 @@ function schedule() {
     }, INTERACTION_PREVIEW_MS);
     return;
   }
-  if (typeof currentVideo.requestVideoFrameCallback === "function") {
+  if (frameSchedulerKind(settings.fiInfra,
+      typeof currentVideo.requestVideoFrameCallback === "function") === "video") {
     scheduledKind = "video";
     rafId = currentVideo.requestVideoFrameCallback(onFrame);
   } else {
@@ -2322,8 +2294,6 @@ function rescan() {
     textureWidth = 0;
     textureHeight = 0;
     resetFiPairState();
-    fiFpsEligible = false;
-    fiFpsEligibleSticky = false;
     metricReport.videoFps = 0;
     videoInViewport = true;
     if (activePageListeners && videoResizeObserver) {
@@ -2365,7 +2335,6 @@ function applySettings(value) {
   const fiChanged =
     settings.fiInfra !== previous.fiInfra ||
     settings.fiSceneCut !== previous.fiSceneCut ||
-    settings.fiFpsGate !== previous.fiFpsGate ||
     settings.fiHalfLuma !== previous.fiHalfLuma ||
     settings.fiBlockMatch !== previous.fiBlockMatch ||
     settings.fiFallback !== previous.fiFallback;
@@ -2456,7 +2425,9 @@ function snapshot() {
     canvasWidth: canvas ? canvas.width : 0,
     canvasHeight: canvas ? canvas.height : 0,
     pipeline: activePipeline,
-    scheduler: currentVideo && typeof currentVideo.requestVideoFrameCallback === "function"
+    scheduler: currentVideo && frameSchedulerKind(
+      settings.fiInfra,
+      typeof currentVideo.requestVideoFrameCallback === "function") === "video"
       ? "video frame"
       : "display refresh",
     settings: { ...settings },
@@ -2464,7 +2435,6 @@ function snapshot() {
     fi: {
       method: fiMethod,
       confidence: fiConfidence,
-      fpsEligible: fiFpsEligibleSticky,
       videoFps: metricReport.videoFps || 0,
       sceneCutHold: fiSceneCutHold,
       hasPair: fiHasPrev && fiHasCurr,
@@ -2698,19 +2668,16 @@ function selfCheck() {
       fiPresentationPhase(140, 100, 40) !== 1) {
     throw new Error("selfCheck: FI display phase is not tied to video time");
   }
-  if (Math.abs(fiFrameDurationMs(50, 1 / 24, 1, 1) - 1000 / 24) > 1e-6 ||
-      Math.abs(fiFrameDurationMs(33.4, NaN, 1, 1) - 33.4) > 1e-6 ||
-      Math.abs(fiFrameDurationMs(NaN, 0.04, 1, 2) - 20) > 1e-6 ||
+  if (Math.abs(fiFrameDurationMs(50, 1 / 24, 1) - 1000 / 24) > 1e-6 ||
+      Math.abs(fiFrameDurationMs(33.4, NaN, 1) - 33.4) > 1e-6 ||
+      Math.abs(fiFrameDurationMs(NaN, 0.04, 2) - 20) > 1e-6 ||
+      Math.abs(fiFrameDurationMs(NaN, 0.04, 1) - 40) > 1e-6 ||
+      fiMidBudgetMs(40, 50) !== 20 || fiMidBudgetMs(0, 50) !== 10 ||
       fiIsTimingGap(249, 1000 / 30) || !fiIsTimingGap(251, 1000 / 30)) {
     throw new Error("selfCheck: FI wall-clock duration/gap calculation failed");
   }
   if (String(recordVideoFrame).includes("fiResumeGap = presentedDelta > 1")) {
     throw new Error("selfCheck: a missed callback must not reset the FI timeline");
-  }
-  if (!fiLatencyEnabled(true, true, true, true) ||
-      fiLatencyEnabled(true, true, false, true) ||
-      fiLatencyEnabled(true, false, false, false)) {
-    throw new Error("selfCheck: FI latency transition gate failed");
   }
   if (frameDrawKind({}) !== "redraw" ||
       frameDrawKind({ newVideoFrame: true }) !== "capture" ||
@@ -2771,12 +2738,6 @@ function selfCheck() {
         removeStillSrc.includes(`document.removeEventListener("${type}", handleStillFrame, true)`))) {
     throw new Error("selfCheck: a paused frame must capture only the current video");
   }
-  const afterUploadSrc = String(fiAfterVideoUpload);
-  if (afterUploadSrc.indexOf("fiUpdateFpsEligibility()") < 0 ||
-      afterUploadSrc.indexOf("fiUpdateFpsEligibility()") >
-        afterUploadSrc.indexOf("fiEnsureFrameTextures(w, h)")) {
-    throw new Error("selfCheck: fps gate must run before FI allocation/copy");
-  }
   if (!String(fiShouldPresentMid).includes('fiMethod === "duplicate"') ||
       String(fiRenderMidToOut).includes('method === "duplicate"')) {
     throw new Error("selfCheck: duplicate FI must not run another pipeline");
@@ -2824,6 +2785,11 @@ function selfCheck() {
   const drawIndex = frameLoopSrc.indexOf("draw({ newVideoFrame: true");
   if (scheduleIndex < 0 || drawIndex < 0 || scheduleIndex > drawIndex) {
     throw new Error("selfCheck: next rVFC must be armed before the heavy draw");
+  }
+  if (frameSchedulerKind(false, true) !== "animation" ||
+      frameSchedulerKind(true, true) !== "video" ||
+      frameSchedulerKind(true, false) !== "animation") {
+    throw new Error("selfCheck: frame scheduler selected the wrong clock");
   }
   const shaderFixture = "step1: String.raw`um`,\ncompose: String.raw`dois`,";
   if (extractRavuShader(shaderFixture, "step1") !== "um" ||

@@ -4,26 +4,6 @@
  * Loaded before content.js in the extension; also runnable via `node fi-core.js`.
  */
 
-/** @returns {boolean} true if source fps is in the 24/30-ish band for 2× FI */
-function fiFpsAllows2x(fps) {
-  const f = Number(fps);
-  if (!Number.isFinite(f) || f <= 0) return false;
-  // ~20–34 covers 23.976 / 24 / 25 / 29.97 / 30 with margin; excludes 48/50/60.
-  return f >= 20 && f <= 34;
-}
-
-/**
- * Hysteresis helper: once in/out of band, require margin to flip.
- * @param {number} fps
- * @param {boolean} previouslyAllowed
- */
-function fiFpsAllows2xSticky(fps, previouslyAllowed) {
-  const f = Number(fps);
-  if (!Number.isFinite(f) || f <= 0) return false;
-  if (previouslyAllowed) return f >= 18 && f <= 36;
-  return fiFpsAllows2x(f);
-}
-
 /**
  * Mean absolute difference of two equal-length luma buffers (0–255 scale).
  * @param {ArrayLike<number>} prev
@@ -239,7 +219,6 @@ function fiMidFitsDeadline(phase, frameDurationMs, estimatedCostMs, marginMs = 2
  */
 function fiPickMethod(ctx) {
   if (!ctx || !ctx.infra) return "skip";
-  if (ctx.fpsGate && !ctx.fpsOk) return "skip";
   if (ctx.sceneCutEnabled && ctx.sceneCut) return "duplicate";
   if (!ctx.blockMatchEnabled) {
     return ctx.fallbackEnabled ? "blend" : "blend";
@@ -255,7 +234,6 @@ function fiDefaultSettings() {
   return {
     fiInfra: false,
     fiSceneCut: true,
-    fiFpsGate: true,
     fiHalfLuma: true,
     fiBlockMatch: true,
     fiFallback: true,
@@ -271,7 +249,6 @@ function fiNormalizeSettings(value = {}) {
   return {
     fiInfra: flag(value.fiInfra, false),
     fiSceneCut: flag(value.fiSceneCut, true),
-    fiFpsGate: flag(value.fiFpsGate, true),
     fiHalfLuma: flag(value.fiHalfLuma, true),
     fiBlockMatch: flag(value.fiBlockMatch, true),
     fiFallback: flag(value.fiFallback, true),
@@ -279,19 +256,6 @@ function fiNormalizeSettings(value = {}) {
 }
 
 function fiSelfCheck() {
-  if (fiFpsAllows2x(24) !== true || fiFpsAllows2x(30) !== true) {
-    throw new Error("fiSelfCheck: 24/30 must allow 2x");
-  }
-  if (fiFpsAllows2x(60) !== false || fiFpsAllows2x(50) !== false) {
-    throw new Error("fiSelfCheck: 50/60 must not allow 2x");
-  }
-  if (fiFpsAllows2x(0) || fiFpsAllows2x(NaN)) {
-    throw new Error("fiSelfCheck: invalid fps must reject");
-  }
-  if (!fiFpsAllows2xSticky(35, true) || fiFpsAllows2xSticky(35, false)) {
-    throw new Error("fiSelfCheck: hysteresis sticky failed");
-  }
-
   const quiet = new Float32Array(64).fill(40);
   const quiet2 = new Float32Array(64).fill(42);
   const cut = new Float32Array(64).fill(200);
@@ -342,35 +306,29 @@ function fiSelfCheck() {
     throw new Error("fiSelfCheck: bidirectional consistency failed");
   }
 
-  if (fiPickMethod({ infra: false, fpsOk: true }) !== "skip") {
+  if (fiPickMethod({ infra: false }) !== "skip") {
     throw new Error("fiSelfCheck: infra off must skip");
   }
   if (fiPickMethod({
-    infra: true, fpsGate: true, fpsOk: false, sceneCutEnabled: true, sceneCut: false,
-    blockMatchEnabled: true, fallbackEnabled: true, confidence: 0.9,
-  }) !== "skip") {
-    throw new Error("fiSelfCheck: fps gate must skip");
-  }
-  if (fiPickMethod({
-    infra: true, fpsGate: true, fpsOk: true, sceneCutEnabled: true, sceneCut: true,
+    infra: true, sceneCutEnabled: true, sceneCut: true,
     blockMatchEnabled: true, fallbackEnabled: true, confidence: 0.9,
   }) !== "duplicate") {
     throw new Error("fiSelfCheck: scene cut must duplicate");
   }
   if (fiPickMethod({
-    infra: true, fpsGate: false, fpsOk: false, sceneCutEnabled: false, sceneCut: false,
+    infra: true, sceneCutEnabled: false, sceneCut: false,
     blockMatchEnabled: true, fallbackEnabled: true, confidence: 0.1,
   }) !== "duplicate") {
     throw new Error("fiSelfCheck: low confidence must duplicate");
   }
   if (fiPickMethod({
-    infra: true, fpsGate: false, fpsOk: false, sceneCutEnabled: false, sceneCut: false,
+    infra: true, sceneCutEnabled: false, sceneCut: false,
     blockMatchEnabled: true, fallbackEnabled: true, confidence: 0.4,
   }) !== "blend") {
     throw new Error("fiSelfCheck: mid confidence must blend");
   }
   if (fiPickMethod({
-    infra: true, fpsGate: false, fpsOk: false, sceneCutEnabled: false, sceneCut: false,
+    infra: true, sceneCutEnabled: false, sceneCut: false,
     blockMatchEnabled: true, fallbackEnabled: true, confidence: 0.8,
   }) !== "block") {
     throw new Error("fiSelfCheck: high confidence must block");

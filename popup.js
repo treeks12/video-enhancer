@@ -23,7 +23,6 @@ const outline = document.querySelector("#outline");
 const compare = document.querySelector("#compare");
 const fiInfra = document.querySelector("#fiInfra");
 const fiSceneCut = document.querySelector("#fiSceneCut");
-const fiFpsGate = document.querySelector("#fiFpsGate");
 const fiHalfLuma = document.querySelector("#fiHalfLuma");
 const fiBlockMatch = document.querySelector("#fiBlockMatch");
 const fiFallback = document.querySelector("#fiFallback");
@@ -41,7 +40,6 @@ const gpu = document.querySelector("#gpu");
 const decoder = document.querySelector("#decoder");
 const renderScale = document.querySelector("#renderScale");
 const fiMethodEl = document.querySelector("#fiMethod");
-const fiEligibleEl = document.querySelector("#fiEligible");
 const fiConfidenceEl = document.querySelector("#fiConfidence");
 const fiHoldEl = document.querySelector("#fiHold");
 const fiSampleEl = document.querySelector("#fiSample");
@@ -54,7 +52,7 @@ const modeChips = [...document.querySelectorAll("#modeChips .chip")];
 const qualityChips = [...document.querySelectorAll("#qualityChips .chip")];
 const interactionChips = [...document.querySelectorAll("#interactionChips .chip")];
 const presetChips = [...document.querySelectorAll("#presetChips .chip")];
-const fiChecks = [fiInfra, fiSceneCut, fiFpsGate, fiHalfLuma, fiBlockMatch, fiFallback];
+const fiChecks = [fiInfra, fiSceneCut, fiHalfLuma, fiBlockMatch, fiFallback];
 
 let tabId;
 let controlsLocked = false;
@@ -190,7 +188,6 @@ function render(state) {
 
   fiInfra.checked = state.settings.fiInfra === true;
   fiSceneCut.checked = state.settings.fiSceneCut !== false;
-  fiFpsGate.checked = state.settings.fiFpsGate !== false;
   fiHalfLuma.checked = state.settings.fiHalfLuma !== false;
   fiBlockMatch.checked = state.settings.fiBlockMatch !== false;
   fiFallback.checked = state.settings.fiFallback !== false;
@@ -199,7 +196,6 @@ function render(state) {
   }
   const subDisabled = !fiInfra.checked;
   fiSceneCut.disabled = subDisabled;
-  fiFpsGate.disabled = subDisabled;
   fiHalfLuma.disabled = subDisabled;
   fiBlockMatch.disabled = subDisabled;
   fiFallback.disabled = subDisabled;
@@ -226,9 +222,6 @@ function render(state) {
   };
   const methodKey = state.settings.fiInfra ? (fi.method || "skip") : "off";
   fiMethodEl.textContent = methodNames[methodKey] || methodKey;
-  fiEligibleEl.textContent = state.settings.fiInfra
-    ? `${fi.fpsEligible ? "yes" : "no"} · source ${(fi.videoFps || 0).toFixed(1)} fps`
-    : "—";
   fiConfidenceEl.textContent = state.settings.fiInfra && fi.confidence != null
     ? `${(fi.confidence * 100).toFixed(0)}%`
     : "—";
@@ -247,7 +240,7 @@ function render(state) {
       : "Smoothing disabled.");
   if (fiExplain) {
     fiExplain.textContent =
-      "Experimental: generates one midpoint per pair (up to 2×) for ~24/30 fps video; RAVU can be expensive.";
+      "Experimental: generates one midpoint per pair (up to 2×); RAVU can be expensive.";
   }
   if (fiStatus && fiStatusTitle && fiStatusDetail) {
     let tone = "off";
@@ -255,9 +248,6 @@ function render(state) {
     if (!state.settings.fiInfra) {
       title = "Disabled";
       tone = "off";
-    } else if (!fi.fpsEligible && state.settings.fiFpsGate) {
-      title = "Enabled, but source is not 24/30 fps";
-      tone = "warn";
     } else if ((fi.midPerSec || 0) >= (fi.realPerSec || 0) * 0.5 && (fi.realPerSec || 0) > 5) {
       title = methodKey === "block" ? "Generating midpoints (motion)" :
         methodKey === "blend" ? "Generating midpoints (weak blend)" :
@@ -378,7 +368,6 @@ function fiPatchFromUi() {
   return {
     fiInfra: fiInfra.checked,
     fiSceneCut: fiSceneCut.checked,
-    fiFpsGate: fiFpsGate.checked,
     fiHalfLuma: fiHalfLuma.checked,
     fiBlockMatch: fiBlockMatch.checked,
     fiFallback: fiFallback.checked,
