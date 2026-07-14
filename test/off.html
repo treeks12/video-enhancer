@@ -1,7 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>FV Off runtime test</title>
-<p id="status">Verificando modo Off…</p>
+<p id="status">Checking Off mode…</p>
 <video muted autoplay></video>
 <canvas id="source" width="320" height="180" hidden></canvas>
 <script>
@@ -14,10 +14,10 @@
   video.play();
   setTimeout(() => {
     if (document.querySelector("#fv-enhancer-canvas")) {
-      document.querySelector("#status").textContent = "FAIL: canvas criado no modo Off";
+      document.querySelector("#status").textContent = "FAIL: canvas created in Off mode";
       return;
     }
-    document.querySelector("#status").textContent = "PASS: modo Off sem canvas";
+    document.querySelector("#status").textContent = "PASS: Off mode has no canvas";
     fetch("/__fve_off_pass").catch(() => {});
   }, 2000);
 </script>

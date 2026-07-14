@@ -3,22 +3,22 @@ const ext = globalThis.browser ?? globalThis.chrome;
 /*
  * Firefox Video Enhancer
  *
- * Prova: o <video> principal vira textura WebGL2 e é desenhado num canvas
- * sobreposto com FSR1 (EASU + RCAS) ou RAVU-lite AR + RCAS. No modo
- * Desativado, nenhum canvas ou callback de renderização permanece ativo.
+ * The main <video> becomes a WebGL2 texture and is drawn on an overlaid canvas
+ * with FSR1 (EASU + RCAS) or RAVU-lite AR + RCAS. In Disabled mode, no canvas
+ * or rendering callback remains active.
  *
- * Canvas como irmão logo após o <video> (mesmo contêiner):
- *  - DOM order o coloca ACIMA do vídeo, sem brigar com z-index do site.
- *  - Rola/resize junto com o player; durante scroll o efeito pausa para liberar
- *    o compositor da página.
- *  - pointer-events:none => cliques atravessam; controles (irmãos depois do
- *    canvas) continuam visíveis e clicáveis.
+ * Canvas as a sibling immediately after <video> (same container):
+ *  - DOM order places it ABOVE the video without fighting the site's z-index.
+ *  - Scrolls/resizes with the player; while scrolling, the effect pauses to free
+ *    the page compositor.
+ *  - pointer-events:none => clicks pass through; controls (siblings after the
+ *    canvas) remain visible and clickable.
  *
- * Self-check: `node content.js` roda asserções sobre o seletor de vídeo.
+ * Self-check: `node content.js` runs assertions over the video selector.
  */
 
 // --------------------------------------------------------------------------
-// Lógica pura (testável sem DOM)
+// Pure logic (testable without a DOM)
 // --------------------------------------------------------------------------
 
 function visibleArea(rect, vw, vh) {
@@ -100,7 +100,7 @@ const VERT = `#version 300 es
 layout(location=0) in vec2 a_pos;
 out vec2 v_uv;
 void main() {
-  v_uv = vec2(a_pos.x * 0.5 + 0.5, 0.5 - a_pos.y * 0.5); // flip Y p/ vídeo
+  v_uv = vec2(a_pos.x * 0.5 + 0.5, 0.5 - a_pos.y * 0.5); // flip Y for video
   gl_Position = vec4(a_pos, 0.0, 1.0);
 }`;
 
@@ -319,7 +319,7 @@ void main() {
 
 
 // --------------------------------------------------------------------------
-// Estado (módulo)
+// Module state
 // --------------------------------------------------------------------------
 
 const TAG = "[fv-enhancer]";
@@ -388,7 +388,7 @@ let renderScale = 1;
 let targetWidth = 0;
 let targetHeight = 0;
 let stableWindows = 0;
-let activePipeline = "desativado";
+let activePipeline = "disabled";
 let lastCanvasVisibility = "";
 let lastDatasetPipeline = "";
 let lastDatasetError = "";
@@ -514,8 +514,8 @@ function updateCanvasVisibility() {
 function modeDisplayName(mode) {
   if (mode === "ravu") return "RAVU";
   if (mode === "rcas") return "FSR1";
-  if (mode === "native") return "Nativo";
-  return "Desativado";
+  if (mode === "native") return "Native";
+  return "Disabled";
 }
 
 function applyCanvasOutline(flashing = false) {
@@ -672,7 +672,7 @@ function setRenderScale(value, reason) {
   renderScale = value;
   layoutDirty = true;
   scheduleLayoutSync();
-  log("escala interna", Math.round(value * 100) + "%", reason || "");
+  log("internal scale", Math.round(value * 100) + "%", reason || "");
 }
 
 function selectAutoScale(currentScale, stableCount, report) {
@@ -700,7 +700,7 @@ function selectAutoScale(currentScale, stableCount, report) {
 }
 
 function autoScaleCap(width, height, fps = 60) {
-  // ponytail: degraus conservadores; recalibrar só com telemetria real diversa.
+  // ponytail: conservative steps; recalibrate only with diverse real telemetry.
   const megapixelsPerSecond = width * height * (fps || 60) / 1e6;
   if (megapixelsPerSecond > 700) return 0.5;
   if (megapixelsPerSecond > 350) return 0.7;
@@ -768,19 +768,19 @@ function adaptRenderScale(report) {
   stableWindows = next.stable;
   if (next.scale !== renderScale) {
     setRenderScale(next.scale,
-      next.scale < renderScale ? "— sobrecarga detectada" : "— cinco janelas estáveis");
+      next.scale < renderScale ? "— overload detected" : "— five stable windows");
   }
 }
 
 function fiExplainStatus() {
   if (!settings.fiInfra) {
-    return "Suavização desligada. Ligue para gerar um meio por par (até 2×) em vídeos 24/30 fps.";
+    return "Smoothing is off. Enable it to generate one midpoint per pair (up to 2×) for 24/30 fps video.";
   }
   if (settings.fiFpsGate && !fiFpsEligibleSticky) {
-    return `Fonte ~${(metricReport.videoFps || 0).toFixed(0)} fps: FI não se aplica (só ~24/30).`;
+    return `Source ~${(metricReport.videoFps || 0).toFixed(0)} fps: FI does not apply (only ~24/30).`;
   }
   if (!fiHasPrev || !fiHasCurr) {
-    return "Aguardando o segundo frame do vídeo para montar o par…";
+    return "Waiting for the second video frame to build a pair…";
   }
   if (fiSkipReason) {
     return fiSkipReason;
@@ -788,12 +788,12 @@ function fiExplainStatus() {
   const mids = fiMidPerSec;
   const reals = fiRealPerSec;
   if (fiMethod === "skip") {
-    return "Infra ligada, sem meios neste momento (orçamento ou confiança).";
+    return "Interpolation is enabled, but no midpoints are being generated right now (budget or confidence).";
   }
   if (mids < 1 && reals > 5) {
-    return "Sem meios estáveis — priorizando a cadência real em vez de forçar frames atrasados.";
+    return "No stable midpoints — prioritizing the real cadence instead of forcing late frames.";
   }
-  return `Meios de movimento ~${mids.toFixed(0)}/s · âncoras ~${reals.toFixed(0)}/s · confiança ${(fiConfidence * 100).toFixed(0)}%. Se engasgar, desligue a suavização ou use FSR1.`;
+  return `Motion midpoints ~${mids.toFixed(0)}/s · anchors ~${reals.toFixed(0)}/s · confidence ${(fiConfidence * 100).toFixed(0)}%. If playback stutters, disable smoothing or use FSR1.`;
 }
 
 /**
@@ -809,11 +809,11 @@ function fiShouldPresentMid() {
   }
   if (!fiHasPrev || !fiHasCurr) return false;
   if (settings.fiFpsGate && !fiFpsEligibleSticky) {
-    fiSkipReason = "Fonte fora da faixa 24/30 — meios não agendados.";
+    fiSkipReason = "Source is outside the 24/30 fps range — no midpoints scheduled.";
     return false;
   }
   if (fiMethod === "duplicate") {
-    fiSkipReason = "Cena ou movimento incerto — mantendo a cadência real, sem duplicar o pipeline.";
+    fiSkipReason = "Uncertain scene or motion — keeping the real cadence without duplicating the pipeline.";
     return false;
   }
   if (!["block", "blend"].includes(fiMethod)) return false;
@@ -822,7 +822,7 @@ function fiShouldPresentMid() {
   // Real frame must leave headroom for a mid + delayed anchor before the next pair.
   if (fiLastRealCpuMs > budget * 0.75) {
     fiSkipReason =
-      `Último frame real ${fiLastRealCpuMs.toFixed(1)} ms (orçamento ~${budget.toFixed(0)} ms) — meio cancelado para não engasgar.`;
+      `Last real frame took ${fiLastRealCpuMs.toFixed(1)} ms (budget ~${budget.toFixed(0)} ms) — midpoint cancelled to avoid stutter.`;
     return false;
   }
   return true;
@@ -1030,7 +1030,7 @@ function warmFiPrograms() {
   if (!settings.fiInfra || !gl || (fiBlendProgram && fiWarpProgram)) return;
   queueMicrotask(() => {
     if (settings.fiInfra && gl && !fiEnsurePrograms()) {
-      log("FI shaders indisponíveis:", lastError);
+      log("FI shaders unavailable:", lastError);
     }
   });
 }
@@ -1224,7 +1224,7 @@ function fiComputeDecision() {
       fiConfidence = 0;
       fiMethod = "skip";
       fiSkipReason =
-        `Orçamento estourado (${fiLastRealCpuMs.toFixed(1)} ms); pulando estimativa de movimento.`;
+        `Frame budget exceeded (${fiLastRealCpuMs.toFixed(1)} ms); skipping motion estimation.`;
       return fiMethod;
     }
     if (!sceneCut && settings.fiBlockMatch && hasBudget &&
@@ -1326,7 +1326,7 @@ function fiAfterVideoUpload(video) {
   if (settings.fiFpsGate && !fiFpsEligibleSticky) {
     if (fiHasCurr || fiLatencyActive) resetFiPairState();
     fiMethod = "skip";
-    fiSkipReason = "Fonte fora da faixa 24/30 — FI não processou este frame.";
+    fiSkipReason = "Source is outside the 24/30 fps range — FI did not process this frame.";
     return false;
   }
   const w = video.videoWidth;
@@ -1385,7 +1385,7 @@ function fiScheduleMidFrame(pairSerial, metadata) {
       : duration * (1 - phase) >= estimatedCost + 2;
     if (!fits) {
       fiSkipReason =
-        `Meio tardio cancelado (${(duration * (1 - phase)).toFixed(1)} ms restantes).`;
+        `Late midpoint cancelled (${(duration * (1 - phase)).toFixed(1)} ms remaining).`;
       return;
     }
     try {
@@ -1410,12 +1410,12 @@ function createOverlay() {
   lastCanvasVisibility = "";
   lastDatasetPipeline = "";
   lastDatasetError = "";
-  // ponytail: position:absolute no contêiner do vídeo (attachCanvasTo põe o
-  // canvas como irmão logo após o <video>). z-index omitido de propósito: a
-  // ordem no DOM já o desenha acima do vídeo; controles vêm depois e ficam acima.
+  // ponytail: position:absolute inside the video container (attachCanvasTo puts
+  // the canvas immediately after <video>). z-index is intentionally omitted:
+  // DOM order draws it above the video while later controls remain above it.
   canvas.style.cssText =
     "position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;contain:layout paint size;";
-  // parenting acontece em attachCanvasTo, quando sabemos qual é o vídeo.
+  // Parenting happens in attachCanvasTo once the video is known.
 
   gl = canvas.getContext("webgl2", {
     alpha: false,
@@ -1428,8 +1428,8 @@ function createOverlay() {
   });
   if (!gl) {
     status = "no-webgl";
-    lastError = "WebGL2 indisponível";
-    log("WebGL2 indisponível neste Firefox/hardware");
+    lastError = "WebGL2 unavailable";
+    log("WebGL2 is unavailable in this Firefox/hardware configuration");
     return false;
   }
   timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
@@ -1491,7 +1491,7 @@ function compile(type, src) {
   gl.shaderSource(s, src);
   gl.compileShader(s);
   if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-    log("erro de compilação de shader:", gl.getShaderInfoLog(s));
+    log("shader compilation error:", gl.getShaderInfoLog(s));
     gl.deleteShader(s);
     return null;
   }
@@ -1502,7 +1502,7 @@ function linkProgram(vertexSource, fragmentSource) {
   const vs = compile(gl.VERTEX_SHADER, vertexSource);
   const fs = compile(gl.FRAGMENT_SHADER, fragmentSource);
   if (!vs || !fs) {
-    lastError = "Shader não compilou";
+    lastError = "Shader compilation failed";
     return null;
   }
   const linked = gl.createProgram();
@@ -1512,8 +1512,8 @@ function linkProgram(vertexSource, fragmentSource) {
   gl.deleteShader(vs);
   gl.deleteShader(fs);
   if (!gl.getProgramParameter(linked, gl.LINK_STATUS)) {
-    lastError = gl.getProgramInfoLog(linked) || "Link do shader falhou";
-    log("link do programa falhou:", lastError);
+    lastError = gl.getProgramInfoLog(linked) || "Shader linking failed";
+    log("program linking failed:", lastError);
     gl.deleteProgram(linked);
     return null;
   }
@@ -1542,7 +1542,7 @@ function loadRavuShaders() {
       ravuStepProgram = linkProgram(VERT, extractRavuShader(source, "step1"));
       ravuComposeProgram = linkProgram(VERT_PLAIN, extractRavuShader(source, "compose"));
       if (!ravuStepProgram || !ravuComposeProgram) {
-        throw new Error(lastError || "Shader RAVU-lite não compilou");
+        throw new Error(lastError || "RAVU-lite shader compilation failed");
       }
       ravuSourceLoc = gl.getUniformLocation(ravuStepProgram, "u_source");
       ravuLutLoc = gl.getUniformLocation(ravuStepProgram, "u_lut");
@@ -1564,7 +1564,7 @@ function loadRavuShaders() {
     .catch((error) => {
       ravuShaderError = `RAVU-lite: ${error.message || error}`;
       lastError = ravuShaderError;
-      log("falha ao carregar shaders RAVU-lite:", error);
+      log("failed to load RAVU-lite shaders:", error);
       return false;
     });
   return ravuShadersPromise;
@@ -1580,7 +1580,7 @@ function loadRavuLut() {
     })
     .then((buffer) => {
       if (buffer.byteLength !== 59904) {
-        throw new Error(`LUT com ${buffer.byteLength} bytes; esperado 59904`);
+        throw new Error(`LUT has ${buffer.byteLength} bytes; expected 59904`);
       }
       ravuLutTexture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, ravuLutTexture);
@@ -1594,13 +1594,13 @@ function loadRavuLut() {
       );
       ravuLutReady = true;
       ravuLutError = "";
-      log("LUT RAVU-lite carregada");
+      log("RAVU-lite LUT loaded");
       return true;
     })
     .catch((error) => {
       ravuLutError = `RAVU-lite: ${error.message || error}`;
       lastError = ravuLutError;
-      log("falha ao carregar LUT RAVU-lite:", error);
+      log("failed to load RAVU-lite LUT:", error);
       return false;
     });
   return ravuLutPromise;
@@ -1632,7 +1632,7 @@ function ensureIntermediate() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   if (!complete) {
     status = "error";
-    lastError = "Framebuffer intermediário incompleto";
+    lastError = "Incomplete intermediate framebuffer";
     return false;
   }
   intermediateWidth = canvas.width;
@@ -1671,7 +1671,7 @@ function ensureRavuIntermediate() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   if (!complete) {
     status = "error";
-    lastError = "Framebuffer RAVU-lite incompleto";
+    lastError = "Incomplete RAVU-lite framebuffer";
     return false;
   }
   ravuWidth = width;
@@ -1682,7 +1682,7 @@ function ensureRavuIntermediate() {
 function attachCanvasTo(video) {
   if (!canvas || !video.parentElement) return;
   if (canvas.parentNode !== video.parentElement) {
-    // ponytail: insere logo APÓS o vídeo => acima no paint, abaixo dos controles.
+    // ponytail: insert immediately AFTER video => above its paint, below controls.
     video.parentElement.insertBefore(canvas, video.nextSibling);
   }
   ensureCompareLabels();
@@ -1709,7 +1709,7 @@ function deactivateRenderer() {
   currentVideo = null;
   videoInViewport = true;
   if (canvas && canvas.parentNode) canvas.remove();
-  activePipeline = "desativado";
+  activePipeline = "disabled";
   status = "off";
   lastError = "";
   resetMetricWindow(performance.now());
@@ -1733,11 +1733,11 @@ function syncLayout() {
   const parent = currentVideo.parentElement;
   const vRect = currentVideo.getBoundingClientRect();
   const pRect = parent.getBoundingClientRect();
-  // coords relativas ao contêiner posicionado (player geralmente position:relative)
+  // Coordinates relative to the positioned container (usually position:relative).
   const left = vRect.left - pRect.left;
   const top = vRect.top - pRect.top;
 
-  // ponytail: cap em DPR 2 — resolver 4K num canvas de 900px é desperdício.
+  // ponytail: cap at DPR 2 — resolving 4K into a 900px canvas is wasteful.
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   targetWidth = Math.max(1, Math.round(vRect.width * dpr));
   targetHeight = Math.max(1, Math.round(vRect.height * dpr));
@@ -1748,7 +1748,7 @@ function syncLayout() {
     if (renderScale > cap) {
       renderScale = cap;
       stableWindows = 0;
-      log("escala interna", Math.round(cap * 100) + "% — orçamento de pixels");
+      log("internal scale", Math.round(cap * 100) + "% — pixel budget");
     }
   }
   const scale = effectiveRenderScale();
@@ -1795,11 +1795,11 @@ function draw(options = {}) {
         settings.quality,
       ) && (!ravuLutReady || !ravuStepProgram || !ravuComposeProgram)) {
     const ravuError = ravuShaderError || ravuLutError;
-    activePipeline = ravuError ? "RAVU-lite indisponível" : "RAVU-lite carregando";
+    activePipeline = ravuError ? "RAVU-lite unavailable" : "RAVU-lite loading";
     updateCanvasDataset(activePipeline, ravuError);
     if (ravuError) {
       invalidateRavuRetry();
-      // Assets ausentes/quebrados: não deixar canvas preto cobrindo o vídeo.
+      // Missing/broken assets: do not leave a black canvas covering the video.
       status = "error";
       lastError = ravuError;
       updateCanvasVisibility();
@@ -1826,7 +1826,7 @@ function draw(options = {}) {
             if (generation !== ravuRetryGeneration) return;
             ravuShaderError = `RAVU-lite: ${error.message || error}`;
             lastError = ravuShaderError;
-            log("falha inesperada no coordenador RAVU-lite:", error);
+            log("unexpected RAVU-lite coordinator failure:", error);
           })
           .finally(() => {
             if (generation !== ravuRetryGeneration) return;
@@ -1887,12 +1887,12 @@ function draw(options = {}) {
       }
       if (e && (e.name === "SecurityError" || /security/i.test(String(e && e.message)))) {
         status = "tainted";
-        lastError = e.message || "CORS bloqueou o frame";
-        log("CORS bloqueou o acesso ao frame:", e.message);
+        lastError = e.message || "CORS blocked the frame";
+        log("CORS blocked access to the frame:", e.message);
       } else {
         status = "error";
         lastError = String(e && (e.message || e));
-        log("texImage2D falhou inesperadamente:", e);
+        log("texImage2D failed unexpectedly:", e);
       }
       stop();
       return;
@@ -1913,7 +1913,7 @@ function draw(options = {}) {
         sourceTex = fiPrevTexture;
         srcW = textureWidth;
         srcH = textureHeight;
-        fiTag = " · FI âncora";
+        fiTag = " · FI anchor";
         presentation = "anchor";
         if (fiShouldPresentMid()) {
           fiScheduleMidFrame(fiPairSerial, options.videoMetadata);
@@ -1931,7 +1931,7 @@ function draw(options = {}) {
     presentation = "mid";
   } else if (fiLatencyActive && fiHasPrev && fiHasCurr) {
     sourceTex = fiPrevTexture;
-    fiTag = " · FI âncora";
+    fiTag = " · FI anchor";
     presentation = "anchor";
   }
 
@@ -2001,7 +2001,7 @@ function draw(options = {}) {
       0, settings.compare ? 1 : 0,
     );
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    activePipeline = "Nativo";
+    activePipeline = "Native";
   } else {
     const useEasu = canvas.width > srcW || canvas.height > srcH;
     const rcasStrength = adjustedRcasStrength(
@@ -2046,7 +2046,7 @@ function draw(options = {}) {
       );
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       activePipeline = settings.mode === "ravu"
-        ? "RCAS (RAVU ignorado: perfil econômico + saída ≤ fonte)"
+        ? "RCAS (RAVU skipped: economy profile + output ≤ source)"
         : "RCAS";
     }
   }
@@ -2067,7 +2067,7 @@ function draw(options = {}) {
   if (status !== "ok") {
     status = "ok";
     lastError = "";
-    log("renderizando", activePipeline, settings.strength + "% sobre <video>",
+    log("rendering", activePipeline, settings.strength + "% over <video>",
         currentVideo.clientWidth + "x" + currentVideo.clientHeight);
   }
   updateCanvasVisibility();
@@ -2084,7 +2084,7 @@ function onFrame(now, metadata) {
   const freshFrame = recordVideoFrame(now, metadata);
   if (fiResumeGap) {
     resetFiPairState();
-    fiSkipReason = "Lacuna temporal detectada — reiniciando o par FI.";
+    fiSkipReason = "Timing gap detected — resetting the FI pair.";
   }
   publishMetrics(now);
   if (!currentVideo || !document.body.contains(currentVideo)) {
@@ -2138,7 +2138,7 @@ function cancelScheduledFrame(video = currentVideo) {
 }
 
 function scheduleLayoutSync() {
-  // reposiciona o canvas mesmo quando pausado (theater/resize sem nova frame)
+  // Reposition the canvas while paused too (theater/resize without a new frame).
   if (stopped || layoutRafScheduled || !currentVideo) return;
   layoutRafScheduled = true;
   requestAnimationFrame(() => {
@@ -2230,11 +2230,11 @@ function handleStillFrame(event) {
 function attachDiscoveryListeners() {
   if (discoveryListeners) return;
   discoveryListeners = true;
-  // Eventos nativos descobrem vídeos novos em SPAs sem varrer a página em loop.
+  // Native events discover new videos in SPAs without scanning the page in a loop.
   document.addEventListener("play", handleVideoDiscovery, true);
   document.addEventListener("loadedmetadata", handleVideoDiscovery, true);
   document.addEventListener("emptied", handleVideoDiscovery, true);
-  // rVFC não dispara parado: capture o frame real ao pausar/terminar/alterar o atual.
+  // rVFC does not fire while paused: capture on pause/end/current-time changes.
   document.addEventListener("pause", handleStillFrame, true);
   document.addEventListener("ended", handleStillFrame, true);
   document.addEventListener("seeked", handleStillFrame, true);
@@ -2254,7 +2254,7 @@ function detachDiscoveryListeners() {
 }
 
 // --------------------------------------------------------------------------
-// Seleção de vídeo
+// Video selection
 // --------------------------------------------------------------------------
 
 function handleVideoIntersection(entries) {
@@ -2295,7 +2295,7 @@ function rescan() {
     currentVideo = null;
     if (status !== "no-video") {
       status = "no-video";
-      log("nenhum <video> na página");
+      log("no <video> on the page");
     }
     hideCanvas();
     return;
@@ -2335,7 +2335,7 @@ function rescan() {
       videoIntersectionObserver.observe(next);
     }
     layoutDirty = true;
-    log("vídeo selecionado:", next.clientWidth + "x", next.clientHeight,
+    log("selected video:", next.clientWidth + "x", next.clientHeight,
         next.videoWidth ? "(src " + next.videoWidth + "x" + next.videoHeight + ")" : "");
     if (settings.mode !== "off" && !activateRenderer(true)) return;
   }
@@ -2384,7 +2384,7 @@ function applySettings(value) {
     setRenderScale(scales[settings.quality]);
   } else if (settings.quality === "auto" && previous.quality !== "auto") {
     stableWindows = 0;
-    setRenderScale(1, "— modo automático reiniciado");
+    setRenderScale(1, "— automatic mode reset");
   }
   if (fiChanged) resetFiPairState();
   if (settings.fiInfra) warmFiPrograms();
@@ -2433,7 +2433,7 @@ function loadSettings() {
   return ext.storage.local.get(DEFAULT_SETTINGS)
     .then(applySettings)
     .catch((error) => {
-      log("não foi possível carregar preferências:", error);
+      log("could not load preferences:", error);
     })
     .finally(() => {
       settingsLoaded = true;
@@ -2457,8 +2457,8 @@ function snapshot() {
     canvasHeight: canvas ? canvas.height : 0,
     pipeline: activePipeline,
     scheduler: currentVideo && typeof currentVideo.requestVideoFrameCallback === "function"
-      ? "frame do vídeo"
-      : "refresh da tela",
+      ? "video frame"
+      : "display refresh",
     settings: { ...settings },
     metrics: { ...metricReport, gpuSupported: Boolean(timerExt) },
     fi: {
@@ -2552,9 +2552,9 @@ function stop() {
 function runSpike() {
   if (window.top !== window) return;
 
-  // Evita duplicação se a extensão for injetada manualmente mais de uma vez.
+  // Avoid duplication if the extension is manually injected more than once.
   if (window.__fvEnhancerLoaded) {
-    log("já carregado nesta página — ignorando re-injeção");
+    log("already loaded on this page — ignoring reinjection");
     return;
   }
   window.__fvEnhancerLoaded = true;
@@ -2577,7 +2577,7 @@ function runSpike() {
 }
 
 // --------------------------------------------------------------------------
-// Self-check (roda só fora do navegador, ex.: `node content.js`)
+// Self-check (runs only outside the browser, e.g. `node content.js`)
 // --------------------------------------------------------------------------
 
 function selfCheck() {
@@ -2592,19 +2592,19 @@ function selfCheck() {
 
   const a = [fake(100, 100, true), fake(1280, 720, false), fake(640, 360, false)];
   const pickA = pickLargestVideo(a, 1920, 1080);
-  if (pickA !== a[1]) throw new Error("selfCheck: esperava o 1280x720 em reprodução");
+  if (pickA !== a[1]) throw new Error("selfCheck: expected the playing 1280x720 video");
 
   const b = [fake(2000, 2000, true), fake(500, 500, false)];
   const pickB = pickLargestVideo(b, 3000, 3000);
-  if (pickB !== b[0]) throw new Error("selfCheck: peso 0.3x quebrou a regra esperada");
+  if (pickB !== b[0]) throw new Error("selfCheck: the 0.3x weight broke the expected rule");
 
   const c = [fake(5000, 5000, false)];
   const pickC = pickLargestVideo(c, 1920, 1080);
-  if (pickC !== c[0]) throw new Error("selfCheck: área visível truncada falhou");
+  if (pickC !== c[0]) throw new Error("selfCheck: clipped visible area failed");
 
   const d = [fake(2000, 2000, false, 4, -3000, 0), fake(320, 180, false)];
   const pickD = pickLargestVideo(d, 1920, 1080);
-  if (pickD !== d[1]) throw new Error("selfCheck: vídeo fora da tela foi selecionado");
+  if (pickD !== d[1]) throw new Error("selfCheck: an off-screen video was selected");
 
   const normalized = normalizeSettings({
     mode: "invalid", strength: 150.4, outline: 1, compare: 1, quality: "invalid",
@@ -2613,20 +2613,20 @@ function selfCheck() {
   if (normalized.mode !== "off" || normalized.strength !== 100 ||
       normalized.outline || normalized.compare || normalized.quality !== "high" ||
       normalized.interaction !== "smooth") {
-    throw new Error("selfCheck: normalização de preferências falhou");
+    throw new Error("selfCheck: preference normalization failed");
   }
   if (normalizeSettings({ mode: "passthrough" }).mode !== "off" ||
       normalizeSettings({ mode: "ravu" }).mode !== "ravu" ||
       normalizeSettings({ mode: "native" }).mode !== "native" ||
       normalizeSettings({ interaction: "balanced" }).interaction !== "balanced") {
-    throw new Error("selfCheck: migração de passthrough ou modo RAVU falhou");
+    throw new Error("selfCheck: passthrough or RAVU mode migration failed");
   }
 
   settings = normalizeSettings({ interaction: "balanced" });
   scrolling = true;
   renderScale = 1;
   if (effectiveRenderScale() !== 0.5) {
-    throw new Error("selfCheck: perfil Equilíbrio não reduziu escala durante navegação");
+    throw new Error("selfCheck: Balanced profile did not reduce scale during navigation");
   }
   scrolling = false;
   settings = normalizeSettings(DEFAULT_SETTINGS);
@@ -2639,7 +2639,7 @@ function selfCheck() {
     throw new Error("selfCheck: amostra FI grande demais");
   }
   if (fiDetailedSample.width <= fiSample.width || fiDetailedSample.height <= fiSample.height) {
-    throw new Error("selfCheck: opção FI leve deve ser menor que detalhada");
+    throw new Error("selfCheck: lightweight FI option must be smaller than detailed FI");
   }
   if (typeof fiSelfCheck === "function") fiSelfCheck();
   // Shipped warp shader must use ME-correct sampling (not inverted).
@@ -2649,7 +2649,7 @@ function selfCheck() {
     throw new Error("selfCheck: FI_WARP_FRAG motion sampling direction wrong");
   }
   if (EASU_FRAG.includes("settings.mode") || EASU_FRAG.includes("gl.bindFramebuffer")) {
-    throw new Error("selfCheck: código JS vazou para shader EASU");
+    throw new Error("selfCheck: JS code leaked into the EASU shader");
   }
   if (FI_WARP_FRAG.includes("floor(v_uv * u_mv_grid)") ||
       !FI_WARP_FRAG.includes("packedForward.a") ||
@@ -2681,7 +2681,7 @@ function selfCheck() {
     throw new Error("selfCheck: mid-out path must re-bind fiOutTexture via fiBindOutTarget");
   }
   if (String(fiShouldPresentMid).includes('settings.mode === "ravu"')) {
-    throw new Error("selfCheck: FI não deve bloquear RAVU por modo");
+    throw new Error("selfCheck: FI must not block RAVU by mode");
   }
   if (!String(fiScheduleMidFrame).includes("fiMid: true") ||
       !String(fiScheduleMidFrame).includes("requestAnimationFrame") ||
@@ -2689,9 +2689,9 @@ function selfCheck() {
       !String(fiScheduleMidFrame).includes("phase < 0.35") ||
       String(fiScheduleMidFrame).includes("if (pairSerial === fiPairSerial) fiMidRaf") ||
       !String(draw).includes("options.fiPhase") ||
-      !String(draw).includes("FI âncora") ||
+      !String(draw).includes("FI anchor") ||
       String(draw).includes("fiLight")) {
-    throw new Error("selfCheck: FI deve usar latência de 1 frame e pipeline completo");
+    throw new Error("selfCheck: FI must use one-frame latency and the full pipeline");
   }
   if (Math.abs(fiPresentationPhase(116, 100, 40) - 0.4) > 1e-6 ||
       fiPresentationPhase(99, 100, 40) !== 0 ||
@@ -2705,7 +2705,7 @@ function selfCheck() {
     throw new Error("selfCheck: FI wall-clock duration/gap calculation failed");
   }
   if (String(recordVideoFrame).includes("fiResumeGap = presentedDelta > 1")) {
-    throw new Error("selfCheck: callback perdido não deve reiniciar a linha FI");
+    throw new Error("selfCheck: a missed callback must not reset the FI timeline");
   }
   if (!fiLatencyEnabled(true, true, true, true) ||
       fiLatencyEnabled(true, true, false, true) ||
@@ -2722,11 +2722,11 @@ function selfCheck() {
   const ravuAssetLoad = drawSrc.indexOf("loadRavuAssets()", ravuAssetGate);
   if (ravuAssetGate < 0 || ravuAssetLoad < 0 ||
       !drawSrc.slice(ravuAssetGate, ravuAssetLoad).includes("shouldUseRavu(")) {
-    throw new Error("selfCheck: downscale RAVU não deve carregar assets");
+    throw new Error("selfCheck: RAVU downscale must not load assets");
   }
   if (!String(createOverlay).includes("EXT_disjoint_timer_query_webgl2") ||
       !drawSrc.includes('settings.fiInfra || settings.quality === "auto"')) {
-    throw new Error("selfCheck: FI/Auto deve manter amostragem GPU ativa");
+    throw new Error("selfCheck: FI/Auto must keep GPU sampling active");
   }
   if (drawSrc.indexOf("sourceTex = fiPrevTexture") < 0 ||
       drawSrc.indexOf("sourceTex = fiPrevTexture") > drawSrc.indexOf("fiShouldPresentMid()")) {
@@ -2752,13 +2752,13 @@ function selfCheck() {
   const reenableOverlay = 'if (previous.mode === "off") overlayVisible = true;';
   if (applySrc.indexOf(reenableOverlay) < 0 ||
       applySrc.indexOf(reenableOverlay) > applySrc.indexOf("attachDiscoveryListeners()")) {
-    throw new Error("selfCheck: reativar um modo deve restaurar o overlay antes do renderer");
+    throw new Error("selfCheck: reactivating a mode must restore the overlay before the renderer");
   }
   const ravuErrorStart = drawSrc.indexOf("if (ravuError)");
   const ravuErrorEnd = drawSrc.indexOf("} else {", ravuErrorStart);
   if (ravuErrorStart < 0 || ravuErrorEnd < ravuErrorStart ||
       !drawSrc.slice(ravuErrorStart, ravuErrorEnd).includes("updateCanvasVisibility()")) {
-    throw new Error("selfCheck: erro RAVU deve restaurar o vídeo oculto");
+    throw new Error("selfCheck: a RAVU error must restore the hidden video");
   }
   const stillSrc = String(handleStillFrame);
   const addStillSrc = String(attachDiscoveryListeners);
@@ -2769,7 +2769,7 @@ function selfCheck() {
       !["pause", "ended", "seeked", "loadeddata"].every((type) =>
         addStillSrc.includes(`document.addEventListener("${type}", handleStillFrame, true)`) &&
         removeStillSrc.includes(`document.removeEventListener("${type}", handleStillFrame, true)`))) {
-    throw new Error("selfCheck: frame parado deve capturar só o vídeo atual");
+    throw new Error("selfCheck: a paused frame must capture only the current video");
   }
   const afterUploadSrc = String(fiAfterVideoUpload);
   if (afterUploadSrc.indexOf("fiUpdateFpsEligibility()") < 0 ||
@@ -2791,7 +2791,7 @@ function selfCheck() {
     cpuMs: 1, gpuMs: 1,
   });
   if (severe.scale !== 0.7 || severe.stable !== 0) {
-    throw new Error("selfCheck: Auto não reagiu à sobrecarga severa");
+    throw new Error("selfCheck: Auto did not react to severe overload");
   }
   let recovery = { scale: 0.7, stable: 0 };
   for (let i = 0; i < 5; i++) {
@@ -2801,34 +2801,34 @@ function selfCheck() {
     });
   }
   if (recovery.scale !== 0.85 || recovery.stable !== 0) {
-    throw new Error("selfCheck: Auto não recuperou após cinco janelas estáveis");
+    throw new Error("selfCheck: Auto did not recover after five stable windows");
   }
   if (autoScaleCap(1920, 1080, 60) !== 1 ||
       autoScaleCap(2560, 1440, 60) !== 0.85 ||
       autoScaleCap(3840, 2160, 60) !== 0.7) {
-    throw new Error("selfCheck: orçamento de megapixels escolheu escala errada");
+    throw new Error("selfCheck: megapixel budget selected the wrong scale");
   }
   if (adjustedRcasStrength(1, 1) !== 1 ||
       Math.abs(adjustedRcasStrength(1, 3) - 0.7) > 1e-6) {
-    throw new Error("selfCheck: proteção de halos calculou intensidade errada");
+    throw new Error("selfCheck: halo protection calculated the wrong strength");
   }
   if (fiOutputFps(24, true) !== 48 || fiOutputFps(30, false) !== 30 ||
       fiOutputFps(0, true) !== 0 ||
       !shouldUseRavu(1920, 1080, 1792, 1008, "high") ||
       shouldUseRavu(1920, 1080, 1792, 1008, "balanced") ||
       !shouldUseRavu(1280, 720, 1920, 1080, "balanced")) {
-    throw new Error("selfCheck: orçamento FI ou gate RAVU/downscale incorreto");
+    throw new Error("selfCheck: incorrect FI budget or RAVU/downscale gate");
   }
   const frameLoopSrc = String(onFrame);
   const scheduleIndex = frameLoopSrc.lastIndexOf("schedule();");
   const drawIndex = frameLoopSrc.indexOf("draw({ newVideoFrame: true");
   if (scheduleIndex < 0 || drawIndex < 0 || scheduleIndex > drawIndex) {
-    throw new Error("selfCheck: próximo rVFC deve ser armado antes do draw pesado");
+    throw new Error("selfCheck: next rVFC must be armed before the heavy draw");
   }
   const shaderFixture = "step1: String.raw`um`,\ncompose: String.raw`dois`,";
   if (extractRavuShader(shaderFixture, "step1") !== "um" ||
       extractRavuShader(shaderFixture, "compose") !== "dois") {
-    throw new Error("selfCheck: parser lazy do RAVU falhou");
+    throw new Error("selfCheck: lazy RAVU parser failed");
   }
 
   settings = normalizeSettings({ ...DEFAULT_SETTINGS, mode: "native" });
@@ -2841,10 +2841,10 @@ function selfCheck() {
   if (metricWindow.mediaFrames !== 2 || metricWindow.missed !== 1 ||
       metricWindow.realDrawn !== 1 || metricWindow.midDrawn !== 1 ||
       metricWindow.cpuSamples !== 1 || fiResumeGap) {
-    throw new Error("selfCheck: salto de frames não foi contabilizado corretamente");
+    throw new Error("selfCheck: skipped frames were not counted correctly");
   }
   recordVideoFrame(400, { presentedFrames: 4, mediaTime: 0.4, expectedDisplayTime: 405 });
-  if (!fiResumeGap) throw new Error("selfCheck: lacuna temporal real não reiniciou FI");
+  if (!fiResumeGap) throw new Error("selfCheck: a real timing gap did not reset FI");
 
   console.log(TAG, "selfCheck OK");
 }
@@ -2860,7 +2860,7 @@ if (typeof window !== "undefined" && window.document) {
     const fiPath = path.join(__dirname, "fi-core.js");
     vm.runInThisContext(fs.readFileSync(fiPath, "utf8"), { filename: fiPath });
   } catch (error) {
-    console.warn("[fv-enhancer] não carregou fi-core.js no self-check:", error.message || error);
+    console.warn("[fv-enhancer] fi-core.js did not load in the self-check:", error.message || error);
   }
   selfCheck();
 }

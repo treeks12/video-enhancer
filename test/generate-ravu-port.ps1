@@ -32,7 +32,7 @@ Assert-Hash $license $licenseHash "LGPL"
 $lines = $hook -split "`n"
 $firstHook = [Array]::IndexOf($lines, "vec4 hook() {")
 $secondDesc = [Array]::IndexOf($lines, "//!DESC RAVU-Lite-AR (step2, r3)")
-if ($firstHook -lt 0 -or $secondDesc -lt 0) { throw "Passos RAVU não encontrados" }
+if ($firstHook -lt 0 -or $secondDesc -lt 0) { throw "RAVU steps not found" }
 
 $body = ($lines[$firstHook..($secondDesc - 1)] -join "`n")
 $body = $body.Replace("vec4 hook() {", "void main() {`n  ivec2 base = ivec2(floor(v_uv * vec2(textureSize(u_source, 0))));")
@@ -143,7 +143,7 @@ globalThis.__fvRavuShaders = Object.freeze({
 "@
 
 $hex = $lines[201].Trim()
-if ($hex.Length -ne 119808) { throw "LUT RAVU com tamanho inesperado" }
+if ($hex.Length -ne 119808) { throw "RAVU LUT has an unexpected size" }
 $lut = [Convert]::FromHexString($hex)
 
 [IO.File]::WriteAllText((Join-Path $target "ravu-lite-ar-r3.hook"), $hook, $utf8)

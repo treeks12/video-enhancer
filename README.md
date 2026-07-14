@@ -1,25 +1,25 @@
 # Video Enhancer for Firefox
 
-## Para que serve
+## What it does
 
-Melhora o vídeo principal da página localmente com WebGL2:
+Enhances the main video on a page locally with WebGL2:
 
-- FSR1 (EASU + RCAS) para upscale e nitidez;
-- RAVU-lite + RCAS para reconstrução adaptativa;
-- interpolação de quadros experimental para vídeos próximos de 24/30 fps.
+- FSR1 (EASU + RCAS) for upscaling and sharpening;
+- RAVU-lite + RCAS for adaptive reconstruction;
+- experimental frame interpolation for video near 24/30 fps.
 
-Não há telemetria ou coleta de dados. A única permissão é `storage`, usada para salvar as preferências.
+There is no telemetry or data collection. The only permission is `storage`, used to save local preferences.
 
-## Como usar
+## How to use
 
-1. Baixe o ZIP para Firefox na página [Releases](https://github.com/treeks12/video-enhancer/releases).
-2. Enquanto a versão da AMO não estiver assinada, abra `about:debugging#/runtime/this-firefox`, clique em **Carregar extensão temporária** e selecione o ZIP.
-3. Abra uma página com vídeo, clique no ícone da extensão e escolha Nativo, FSR1 ou RAVU.
-4. Ative a interpolação somente se quiser testar 2x em fontes próximas de 24/30 fps.
+1. Download the Firefox ZIP from [Releases](https://github.com/treeks12/video-enhancer/releases).
+2. Until the AMO build is signed, open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose the ZIP.
+3. Open a page with video, click the extension icon, and select Native, FSR1, or RAVU.
+4. Enable interpolation only if you want to test 2× output on sources near 24/30 fps.
 
-## Bugs conhecidos
+## Known bugs
 
-- A interpolação pode produzir ghosting ou distorções em oclusões, movimentos extremos e cortes de cena.
-- Vídeos protegidos por DRM ou bloqueados por CORS podem não aceitar processamento.
-- Apenas o vídeo principal do documento superior é processado; vídeos dentro de iframes não são suportados.
-- RAVU e interpolação podem ser reduzidos ou cancelados quando não cabem no orçamento da GPU.
+- Interpolation can produce ghosting or distortion around occlusions, extreme motion, and scene cuts.
+- DRM-protected or CORS-blocked video may reject processing.
+- Only the main video in the top-level document is processed; videos inside iframes are unsupported.
+- RAVU and interpolation can be reduced or cancelled when they do not fit the GPU budget.

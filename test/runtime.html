@@ -8,7 +8,7 @@
   #source { display: none; }
 </style>
 <h1>Firefox Video Enhancer — runtime test</h1>
-<p id="status">Aguardando a extensão…</p>
+<p id="status">Waiting for the extension…</p>
 <div id="player"></div>
 <canvas id="source" width="640" height="360"></canvas>
 <script>
@@ -83,7 +83,7 @@
     if (!scrollTimerExtended) {
       if (performance.now() - scrollStartedAt < 220) return;
       if (overlay.style.visibility !== "hidden") {
-        throw new Error("overlay voltou durante scroll contínuo");
+        throw new Error("overlay returned during continuous scrolling");
       }
       scrollTimerExtended = true;
       return;
@@ -105,7 +105,7 @@
     }
     if (returningOnscreen && overlay.style.visibility !== "visible") return;
     if (prematureOverlay || overlayBeforeReveal) {
-      throw new Error("overlay criado antes de existir vídeo visível");
+      throw new Error("overlay was created before a visible video existed");
     }
     const message = `PASS: overlay ${overlay.width}×${overlay.height}`;
     document.querySelector("#status").textContent = message;

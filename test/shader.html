@@ -34,7 +34,7 @@
 
   fetch("../content.js").then((response) => response.text()).then(async (source) => {
     const gl = document.createElement("canvas").getContext("webgl2");
-    if (!gl) throw new Error("WebGL2 indisponível");
+    if (!gl) throw new Error("WebGL2 unavailable");
     const vertex = extract(source, "VERT");
     const fragment = extract(source, "FRAG");
     const plainVertex = extract(source, "VERT_PLAIN");
@@ -103,7 +103,7 @@
     let lutBuffer = await fetchLutBuffer();
     if (lutBuffer.byteLength !== 59904) lutBuffer = await fetchLutBuffer();
     if (lutBuffer.byteLength !== 59904) {
-      throw new Error(`LUT RAVU com ${lutBuffer.byteLength} bytes; esperado 59904`);
+      throw new Error(`RAVU LUT has ${lutBuffer.byteLength} bytes; expected 59904`);
     }
     const lutData = new Float32Array(lutBuffer);
     const lut = gl.createTexture();
@@ -164,7 +164,7 @@
     const ravuPixel = new Uint8Array(4);
     gl.readPixels(3, 3, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, ravuPixel);
     if (gl.getError() !== gl.NO_ERROR || ravuPixel[3] !== 255) {
-      throw new Error(`saída RAVU inválida: ${ravuPixel.join(",")}`);
+      throw new Error(`invalid RAVU output: ${ravuPixel.join(",")}`);
     }
     gl.useProgram(program);
     gl.activeTexture(gl.TEXTURE0);
@@ -219,9 +219,9 @@
       ravuDifference += Math.abs(ravuPixels[i] - referencePixels[i]);
       ravuRcasDifference += Math.abs(ravuRcasPixels[i] - referencePixels[i]);
     }
-    if (ravuDifference < 20) throw new Error("RAVU não alterou a referência bilinear");
+    if (ravuDifference < 20) throw new Error("RAVU did not change the bilinear reference");
     if (ravuRcasDifference <= ravuDifference) {
-      throw new Error(`RAVU+RCAS não aumentou o efeito: ${ravuRcasDifference} <= ${ravuDifference}`);
+      throw new Error(`RAVU+RCAS did not increase the effect: ${ravuRcasDifference} <= ${ravuDifference}`);
     }
     const message =
       `PASS: passthrough=${passthrough}, RCAS=${sharpened}, RAVU Δ=${ravuDifference}, RAVU+RCAS Δ=${ravuRcasDifference}`;

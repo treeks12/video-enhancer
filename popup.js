@@ -1,6 +1,19 @@
 "use strict";
 const ext = globalThis.browser ?? globalThis.chrome;
 
+function localizeStatic() {
+  for (const element of document.querySelectorAll("[data-i18n]")) {
+    const value = ext.i18n.getMessage(element.dataset.i18n);
+    if (value) element.textContent = value;
+  }
+  for (const element of document.querySelectorAll("[data-i18n-aria-label]")) {
+    const value = ext.i18n.getMessage(element.dataset.i18nAriaLabel);
+    if (value) element.setAttribute("aria-label", value);
+  }
+}
+
+localizeStatic();
+
 const statusChip = document.querySelector("#statusChip");
 const label = document.querySelector("#label");
 const detail = document.querySelector("#detail");
@@ -47,13 +60,13 @@ let tabId;
 let controlsLocked = false;
 
 const labels = {
-  off: "Desativado",
-  idle: "Aguardando vídeo",
-  ok: "Renderizando",
-  "no-video": "Nenhum vídeo encontrado",
-  "no-webgl": "WebGL2 indisponível",
-  tainted: "Vídeo bloqueado por CORS",
-  error: "Falha ao capturar o vídeo",
+  off: "Disabled",
+  idle: "Waiting for video",
+  ok: "Rendering",
+  "no-video": "No video found",
+  "no-webgl": "WebGL2 unavailable",
+  tainted: "Video blocked by CORS",
+  error: "Failed to capture video",
 };
 
 const tones = {
@@ -67,15 +80,15 @@ const tones = {
 };
 
 const modeNames = {
-  off: "Desativado",
-  native: "Nativo",
+  off: "Disabled",
+  native: "Native",
   rcas: "FSR1",
   ravu: "RAVU-lite",
 };
 
 const schedulerNames = {
-  "frame do vídeo": "frame do vídeo",
-  "refresh da tela": "refresh da tela",
+  "video frame": "video frame",
+  "display refresh": "display refresh",
 };
 
 function setPressed(chips, attr, value) {
@@ -90,7 +103,7 @@ function setChipDisabled(chips, disabled) {
 
 function healthSummary(state) {
   if (state.settings.mode === "off") {
-    return { text: "Inativo", tone: "off" };
+    return { text: "Inactive", tone: "off" };
   }
   if (state.status !== "ok" || !state.hasVideo || !state.visible) {
     return { text: "—", tone: "off" };
@@ -98,10 +111,10 @@ function healthSummary(state) {
   const m = state.metrics;
   const latePct = m.latePct === null ? 0 : m.latePct;
   if (m.missedPct > 8 || latePct > 25 || m.videoDroppedPct > 5) {
-    return { text: "Sobrecarga", tone: "warn" };
+    return { text: "Overloaded", tone: "warn" };
   }
   if (m.missedPct > 1 || latePct > 10) {
-    return { text: "Atenção", tone: "warn" };
+    return { text: "Attention", tone: "warn" };
   }
   return { text: "OK", tone: "ok" };
 }
@@ -110,8 +123,8 @@ function formatDetail(state) {
   if (state.lastError) return state.lastError;
   if (!state.hasVideo) {
     return state.settings.mode === "off"
-      ? "Escolha RAVU para ativar o efeito nesta aba."
-      : "Aguardando um vídeo na página.";
+      ? "Choose an effect to enable processing in this tab."
+      : "Waiting for a video on this page.";
   }
   const pipeline = state.pipeline || modeNames[state.settings.mode] || "—";
   const size = state.canvasWidth && state.canvasHeight
@@ -142,12 +155,12 @@ function render(state) {
   label.textContent = labels[state.status] || state.status;
   detail.textContent = formatDetail(state);
   hint.textContent = state.settings.mode === "off"
-    ? "Off desliga totalmente o processamento e o overlay nesta página."
+    ? "Off completely disables processing and the overlay on this page."
     : state.settings.mode === "native"
-      ? "Nativo mantém o canvas/overlay, mas não aplica RAVU/FSR/RCAS. Use para FI sem filtro."
+      ? "Native keeps the canvas/overlay but applies no spatial filter. Use it for unfiltered FI."
       : state.settings.mode === "ravu"
-        ? "RAVU-lite é o modo de qualidade. FSR1 fica como opção leve."
-        : "FSR1 é o modo leve. Use Nativo para testar FI sem upscale.";
+        ? "RAVU-lite is the quality mode. FSR1 is the lighter option."
+        : "FSR1 is the lightweight mode. Use Native to test FI without upscaling.";
 
   setPressed(modeChips, "mode", state.settings.mode);
   setPressed(qualityChips, "quality", state.settings.quality);
@@ -193,7 +206,7 @@ function render(state) {
 
   toggle.disabled = state.settings.mode === "off" ||
     !state.hasVideo || state.status !== "ok";
-  toggle.textContent = state.visible ? "Ocultar overlay" : "Mostrar overlay";
+  toggle.textContent = state.visible ? "Hide overlay" : "Show overlay";
 
   const health = healthSummary(state);
   healthEl.textContent = health.text;
@@ -205,53 +218,53 @@ function render(state) {
   renderScale.textContent = `${Math.round(state.metrics.renderScale * 100)}%`;
   const fi = state.fi || {};
   const methodNames = {
-    skip: "sem meios",
-    blend: "mistura (fraco)",
-    block: "movimento (mais visível)",
-    duplicate: "cópia (não suaviza)",
-    off: "desligado",
+    skip: "no midpoints",
+    blend: "blend (weak)",
+    block: "motion (more visible)",
+    duplicate: "copy (no smoothing)",
+    off: "disabled",
   };
   const methodKey = state.settings.fiInfra ? (fi.method || "skip") : "off";
   fiMethodEl.textContent = methodNames[methodKey] || methodKey;
   fiEligibleEl.textContent = state.settings.fiInfra
-    ? `${fi.fpsEligible ? "sim" : "não"} · fonte ${(fi.videoFps || 0).toFixed(1)} fps`
+    ? `${fi.fpsEligible ? "yes" : "no"} · source ${(fi.videoFps || 0).toFixed(1)} fps`
     : "—";
   fiConfidenceEl.textContent = state.settings.fiInfra && fi.confidence != null
     ? `${(fi.confidence * 100).toFixed(0)}%`
     : "—";
   fiHoldEl.textContent = state.settings.fiInfra
-    ? `${fi.sceneCutHold || 0} · ${fi.hasPair ? "par ok" : "sem par ainda"}`
+    ? `${fi.sceneCutHold || 0} · ${fi.hasPair ? "pair ready" : "no pair yet"}`
     : "—";
   fiSampleEl.textContent = fi.sample || "—";
   fiRatesEl.textContent = state.settings.fiInfra
-    ? `${(fi.realPerSec || 0).toFixed(0)} / ${(fi.midPerSec || 0).toFixed(0)} por s`
+    ? `${(fi.realPerSec || 0).toFixed(0)} / ${(fi.midPerSec || 0).toFixed(0)} per s`
     : "—";
 
   // Human status card
   const explain = fi.explain ||
     (state.settings.fiInfra
-      ? "Suavização ligada — veja o detalhe abaixo."
-      : "Suavização desligada.");
+      ? "Smoothing enabled — see details below."
+      : "Smoothing disabled.");
   if (fiExplain) {
     fiExplain.textContent =
-      "Experimental: gera um meio por par (até 2×) em vídeos ~24/30 fps; em RAVU pode pesar.";
+      "Experimental: generates one midpoint per pair (up to 2×) for ~24/30 fps video; RAVU can be expensive.";
   }
   if (fiStatus && fiStatusTitle && fiStatusDetail) {
     let tone = "off";
-    let title = "Desligado";
+    let title = "Disabled";
     if (!state.settings.fiInfra) {
-      title = "Desligado";
+      title = "Disabled";
       tone = "off";
     } else if (!fi.fpsEligible && state.settings.fiFpsGate) {
-      title = "Ligado, mas fonte não é 24/30";
+      title = "Enabled, but source is not 24/30 fps";
       tone = "warn";
     } else if ((fi.midPerSec || 0) >= (fi.realPerSec || 0) * 0.5 && (fi.realPerSec || 0) > 5) {
-      title = methodKey === "block" ? "Gerando meios (movimento)" :
-        methodKey === "blend" ? "Gerando meios (mistura fraca)" :
-          "Gerando meios";
+      title = methodKey === "block" ? "Generating midpoints (motion)" :
+        methodKey === "blend" ? "Generating midpoints (weak blend)" :
+          "Generating midpoints";
       tone = methodKey === "blend" || methodKey === "duplicate" ? "warn" : "ok";
     } else if (state.settings.fiInfra) {
-      title = "Ligado, efeito pouco visível";
+      title = "Enabled, limited visible effect";
       tone = "warn";
     }
     fiStatus.dataset.tone = tone;
@@ -262,13 +275,13 @@ function render(state) {
   missed.textContent = `${state.metrics.missed} (${state.metrics.missedPct.toFixed(1)}%)`;
   videoDropped.textContent =
     `${state.metrics.videoDropped} (${state.metrics.videoDroppedPct.toFixed(1)}%)`;
-  late.textContent = state.metrics.latePct === null ? "n/d" : `${state.metrics.latePct.toFixed(1)}%`;
-  cpu.textContent = `${state.metrics.cpuMs.toFixed(2)} ms (máx ${state.metrics.cpuMaxMs.toFixed(1)})`;
+  late.textContent = state.metrics.latePct === null ? "n/a" : `${state.metrics.latePct.toFixed(1)}%`;
+  cpu.textContent = `${state.metrics.cpuMs.toFixed(2)} ms (max ${state.metrics.cpuMaxMs.toFixed(1)})`;
   gpu.textContent = state.metrics.gpuMs === null
-    ? (state.metrics.gpuSupported ? "medindo…" : "n/d")
+    ? (state.metrics.gpuSupported ? "measuring…" : "n/a")
     : `${state.metrics.gpuMs.toFixed(2)} ms`;
   decoder.textContent = state.metrics.decoderMs === null
-    ? "n/d"
+    ? "n/a"
     : `${state.metrics.decoderMs.toFixed(2)} ms`;
 }
 
@@ -285,7 +298,7 @@ async function init() {
   }
   const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
   tabId = tab && tab.id;
-  if (tabId === undefined) throw new Error("Aba ativa não encontrada");
+  if (tabId === undefined) throw new Error("Active tab not found");
   reload.disabled = false;
   render(await send("fv-status"));
 }
@@ -293,9 +306,9 @@ async function init() {
 function unavailable() {
   controlsLocked = true;
   statusChip.dataset.tone = "error";
-  label.textContent = "Recarregue esta página";
-  detail.textContent = "A extensão ainda não foi injetada nesta aba.";
-  hint.textContent = "Recarregue a página para carregar o content script.";
+  label.textContent = "Reload this page";
+  detail.textContent = "The extension has not been injected into this tab yet.";
+  hint.textContent = "Reload the page to load the content script.";
   strength.disabled = true;
   outline.disabled = true;
   compare.disabled = true;

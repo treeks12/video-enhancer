@@ -336,37 +336,37 @@
 
 <div id="statusChip" data-tone="warn" aria-live="polite">
   <span id="dot"></span>
-  <span id="label">Consultando…</span>
+  <span id="label" data-i18n="statusChecking">Checking…</span>
 </div>
-<p id="detail">Carregando configuração…</p>
+<p id="detail" data-i18n="detailLoading">Loading settings…</p>
 
 <div class="panel">
   <div class="field">
-    <div class="field-label"><span>Efeito</span></div>
-    <div class="chips" id="modeChips" role="group" aria-label="Efeito">
+    <div class="field-label"><span data-i18n="effect">Effect</span></div>
+    <div class="chips" id="modeChips" role="group" aria-label="Effect" data-i18n-aria-label="effect">
       <button type="button" class="chip" data-mode="off" aria-pressed="false">Off</button>
-      <button type="button" class="chip" data-mode="native" aria-pressed="false">Nativo</button>
+      <button type="button" class="chip" data-mode="native" aria-pressed="false" data-i18n="modeNative">Native</button>
       <button type="button" class="chip" data-mode="rcas" aria-pressed="false">FSR1</button>
-      <button type="button" class="chip" data-mode="ravu" aria-pressed="false">RAVU<span class="badge">qual.</span></button>
+      <button type="button" class="chip" data-mode="ravu" aria-pressed="false">RAVU<span class="badge" data-i18n="qualityBadge">quality</span></button>
     </div>
   </div>
 
   <div class="field">
     <div class="field-label">
-      <label for="strength">Nitidez (RCAS)</label>
+      <label for="strength" data-i18n="sharpness">Sharpness (RCAS)</label>
       <output id="strengthValue" for="strength">—</output>
     </div>
     <input id="strength" type="range" min="0" max="100" step="1" disabled>
-    <div class="chips" id="presetChips" role="group" aria-label="Presets de nitidez RCAS">
-      <button type="button" class="chip preset" data-strength="20" disabled>Suave</button>
-      <button type="button" class="chip preset" data-strength="35" disabled>Médio</button>
-      <button type="button" class="chip preset" data-strength="100" disabled>Forte</button>
+    <div class="chips" id="presetChips" role="group" aria-label="RCAS sharpness presets" data-i18n-aria-label="sharpnessPresetsAria">
+      <button type="button" class="chip preset" data-strength="20" disabled data-i18n="soft">Soft</button>
+      <button type="button" class="chip preset" data-strength="35" disabled data-i18n="medium">Medium</button>
+      <button type="button" class="chip preset" data-strength="100" disabled data-i18n="strong">Strong</button>
     </div>
   </div>
 
   <div class="field">
-    <div class="field-label"><span>Qualidade</span></div>
-    <div class="chips" id="qualityChips" role="group" aria-label="Qualidade">
+    <div class="field-label"><span data-i18n="quality">Quality</span></div>
+    <div class="chips" id="qualityChips" role="group" aria-label="Quality" data-i18n-aria-label="quality">
       <button type="button" class="chip" data-quality="high" aria-pressed="false">100%</button>
       <button type="button" class="chip" data-quality="balanced" aria-pressed="false">75%</button>
       <button type="button" class="chip" data-quality="performance" aria-pressed="false">50%</button>
@@ -375,71 +375,70 @@
   </div>
 
   <div class="field">
-    <div class="field-label"><span>Durante navegação</span></div>
-    <div class="chips" id="interactionChips" role="group" aria-label="Durante navegação">
-      <button type="button" class="chip" data-interaction="smooth" aria-pressed="false">Fluidez</button>
-      <button type="button" class="chip" data-interaction="balanced" aria-pressed="false">Equilíbrio</button>
-      <button type="button" class="chip" data-interaction="quality" aria-pressed="false">Fidelidade</button>
+    <div class="field-label"><span data-i18n="duringBrowsing">While browsing</span></div>
+    <div class="chips" id="interactionChips" role="group" aria-label="While browsing" data-i18n-aria-label="duringBrowsing">
+      <button type="button" class="chip" data-interaction="smooth" aria-pressed="false" data-i18n="smoothness">Smoothness</button>
+      <button type="button" class="chip" data-interaction="balanced" aria-pressed="false" data-i18n="balance">Balance</button>
+      <button type="button" class="chip" data-interaction="quality" aria-pressed="false" data-i18n="fidelity">Fidelity</button>
     </div>
   </div>
 </div>
 
 <div class="actions">
-  <button type="button" class="primary" id="toggle" disabled>Ocultar overlay</button>
-  <button type="button" class="secondary" id="reload" disabled>Recarregar página</button>
+  <button type="button" class="primary" id="toggle" disabled data-i18n="hideOverlay">Hide overlay</button>
+  <button type="button" class="secondary" id="reload" disabled data-i18n="reloadPage">Reload page</button>
 </div>
 
 <details class="advanced" id="advanced">
-  <summary>Avançado / Diagnóstico</summary>
+  <summary data-i18n="advancedDiagnostics">Advanced / Diagnostics</summary>
   <div class="advanced-body">
-    <label class="check">Contorno de teste <input id="outline" type="checkbox"></label>
-    <label class="check">Comparação 50/50 <input id="compare" type="checkbox"></label>
+    <label class="check"><span data-i18n="testOutline">Test outline</span> <input id="outline" type="checkbox"></label>
+    <label class="check"><span data-i18n="compare5050">50/50 comparison</span> <input id="compare" type="checkbox"></label>
 
     <div>
       <label class="check" style="font-weight:650;font-size:13px;margin-top:6px">
-        Suavização experimental
+        <span data-i18n="experimentalSmoothing">Experimental smoothing</span>
         <input id="fiInfra" type="checkbox">
       </label>
       <p id="fiExplain" class="fi-explain">
-        Laboratório: cria um meio por par (até 2×) em vídeos ~24/30 fps. Funciona em FSR1/RAVU,
-        mas pode custar caro em RAVU.
+        <span data-i18n="fiIntro">Lab: creates one midpoint per pair (up to 2×) for ~24/30 fps video. Works with FSR1/RAVU, but RAVU can be expensive.</span>
       </p>
       <div id="fiStatus" class="fi-status" data-tone="off">
-        <strong id="fiStatusTitle">Desligado</strong>
-        <span id="fiStatusDetail">Resultado atual é sutil; não trate como feature pronta.</span>
+        <strong id="fiStatusTitle" data-i18n="disabled">Disabled</strong>
+        <span id="fiStatusDetail" data-i18n="fiInitialDetail">The current result is subtle; treat this as experimental.</span>
       </div>
 
-      <div class="field-label" style="margin-top:10px"><span>Detalhes da suavização (A/B)</span></div>
-      <p class="fi-explain" style="margin:0 0 8px">Peças internas do experimento. Só mexa para isolar comportamento.</p>
-      <label class="check">Cortar em mudanças de cena <input id="fiSceneCut" type="checkbox"></label>
-      <label class="check">Só em ~24/30 fps (não em 60) <input id="fiFpsGate" type="checkbox"></label>
-      <label class="check">Amostra de movimento leve (recomendado) <input id="fiHalfLuma" type="checkbox"></label>
-      <label class="check">Estimar movimento (block match) <input id="fiBlockMatch" type="checkbox"></label>
-      <label class="check">Se inseguro, misturar/repetir em vez de warp <input id="fiFallback" type="checkbox"></label>
+      <div class="field-label" style="margin-top:10px"><span data-i18n="smoothingDetails">Smoothing details (A/B)</span></div>
+      <p class="fi-explain" style="margin:0 0 8px" data-i18n="fiPieces">Internal experiment controls. Change them only to isolate behavior.</p>
+      <label class="check"><span data-i18n="cutScenes">Cut on scene changes</span> <input id="fiSceneCut" type="checkbox"></label>
+      <label class="check"><span data-i18n="fpsGate">Only ~24/30 fps (not 60)</span> <input id="fiFpsGate" type="checkbox"></label>
+      <label class="check"><span data-i18n="lightMotion">Light motion sample (recommended)</span> <input id="fiHalfLuma" type="checkbox"></label>
+      <label class="check"><span data-i18n="estimateMotion">Estimate motion (block match)</span> <input id="fiBlockMatch" type="checkbox"></label>
+      <label class="check"><span data-i18n="unsafeFallback">When uncertain, blend/repeat instead of warp</span> <input id="fiFallback" type="checkbox"></label>
     </div>
 
     <div class="health">
-      <span>Saúde</span>
+      <span data-i18n="health">Health</span>
       <strong id="health" data-tone="off">—</strong>
     </div>
     <dl class="metrics">
-      <dt>Vídeo / saída total</dt><dd id="fps">—</dd>
-      <dt>Âncoras / meios FI</dt><dd id="fiRates">—</dd>
-      <dt>Escala interna</dt><dd id="renderScale">—</dd>
-      <dt>Método FI</dt><dd id="fiMethod">—</dd>
-      <dt>Fonte ok p/ FI?</dt><dd id="fiEligible">—</dd>
-      <dt>Confiança do match</dt><dd id="fiConfidence">—</dd>
-      <dt>Hold de corte / par</dt><dd id="fiHold">—</dd>
-      <dt>Amostra ME</dt><dd id="fiSample">—</dd>
-      <dt>Overlay não desenhado</dt><dd id="missed">—</dd>
-      <dt>Vídeo descartado</dt><dd id="videoDropped">—</dd>
-      <dt>Callbacks atrasados</dt><dd id="late">—</dd>
-      <dt>CPU por âncora</dt><dd id="cpu">—</dd>
-      <dt>GPU upload + efeito</dt><dd id="gpu">—</dd>
-      <dt>Decode</dt><dd id="decoder">—</dd>
+      <dt data-i18n="videoOutput">Video / total output</dt><dd id="fps">—</dd>
+      <dt data-i18n="anchorsMids">Anchors / FI midpoints</dt><dd id="fiRates">—</dd>
+      <dt data-i18n="internalScale">Internal scale</dt><dd id="renderScale">—</dd>
+      <dt data-i18n="fiMethod">FI method</dt><dd id="fiMethod">—</dd>
+      <dt data-i18n="fiSourceOk">Source eligible for FI?</dt><dd id="fiEligible">—</dd>
+      <dt data-i18n="matchConfidence">Match confidence</dt><dd id="fiConfidence">—</dd>
+      <dt data-i18n="cutHoldPair">Cut hold / pair</dt><dd id="fiHold">—</dd>
+      <dt data-i18n="meSample">ME sample</dt><dd id="fiSample">—</dd>
+      <dt data-i18n="overlayNotDrawn">Overlay not drawn</dt><dd id="missed">—</dd>
+      <dt data-i18n="videoDropped">Video frames dropped</dt><dd id="videoDropped">—</dd>
+      <dt data-i18n="callbacksLate">Late callbacks</dt><dd id="late">—</dd>
+      <dt data-i18n="cpuAnchor">CPU per anchor</dt><dd id="cpu">—</dd>
+      <dt data-i18n="gpuEffect">GPU upload + effect</dt><dd id="gpu">—</dd>
+      <dt data-i18n="decode">Decode</dt><dd id="decoder">—</dd>
     </dl>
   </div>
 </details>
 
-<small class="hint" id="hint">Off desliga tudo; Nativo mantém o canvas/overlay sem filtro para usar FI.</small>
+<small class="hint" id="hint" data-i18n="hintInitial">Off disables everything; Native keeps the canvas/overlay unfiltered for FI.</small>
 <script src="popup.js"></script>

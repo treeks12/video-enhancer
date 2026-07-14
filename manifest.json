@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Video Enhancer for Firefox",
-  "version": "0.0.51",
-  "description": "Aplica FSR1 ou RAVU-lite + RCAS ao vídeo principal usando WebGL2, com FI experimental.",
+  "name": "__MSG_extensionName__",
+  "version": "0.0.52",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
   "browser_specific_settings": {
     "gecko": {
       "id": "{dd5315db-3143-41d7-aa7d-2cf6a225d7fc}",
@@ -18,7 +19,7 @@
     "96": "icons/icon.svg"
   },
   "action": {
-    "default_title": "Video Enhancer for Firefox",
+    "default_title": "__MSG_extensionName__",
     "default_popup": "popup.html",
     "default_icon": {
       "48": "icons/icon.svg",

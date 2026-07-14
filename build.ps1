@@ -7,17 +7,17 @@ $firefoxManifest = Join-Path $root "manifest.json"
 $chromiumManifest = Join-Path $root "manifest.chromium.json"
 
 if (-not (Test-Path -LiteralPath $chromiumManifest -PathType Leaf)) {
-    throw "manifest.chromium.json não existe. O build não criou nem alterou dist/."
+    throw "manifest.chromium.json does not exist. The build did not create or change dist/."
 }
 
 $firefoxVersion = [string](Get-Content -LiteralPath $firefoxManifest -Raw | ConvertFrom-Json).version
 $chromiumVersion = [string](Get-Content -LiteralPath $chromiumManifest -Raw | ConvertFrom-Json).version
 $versionPattern = '^[0-9]+(?:\.[0-9]+){0,3}$'
 if ($firefoxVersion -notmatch $versionPattern -or $chromiumVersion -notmatch $versionPattern) {
-    throw "Versão inválida: use de 1 a 4 componentes numéricos (ex.: 0.0.48)."
+    throw "Invalid version: use 1 to 4 numeric components (for example, 0.0.48)."
 }
 if (-not $firefoxVersion -or $firefoxVersion -ne $chromiumVersion) {
-    throw "Versões divergentes: Firefox='$firefoxVersion', Chromium='$chromiumVersion'."
+    throw "Version mismatch: Firefox='$firefoxVersion', Chromium='$chromiumVersion'."
 }
 
 $dist = Join-Path $root "dist"
@@ -26,6 +26,7 @@ $runtimeFiles = @(
     "fi-core.js"
     "popup.html"
     "popup.js"
+    "_locales/en/messages.json"
     "icons/icon.svg"
     "icons/icon-16.png"
     "icons/icon-32.png"
@@ -41,13 +42,13 @@ $runtimeFiles = @(
 
 foreach ($relativePath in $runtimeFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $relativePath) -PathType Leaf)) {
-        throw "Arquivo obrigatório ausente: $relativePath"
+        throw "Required file missing: $relativePath"
     }
 }
 
 $lut = Join-Path $root "third_party/ravu-lite/ravu-lite-lut3.bin"
 if ((Get-Item -LiteralPath $lut).Length -ne 59904) {
-    throw "LUT RAVU inválida: esperado 59904 bytes."
+    throw "Invalid RAVU LUT: expected 59904 bytes."
 }
 
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
@@ -69,7 +70,7 @@ function New-Package([string]$Name, [string]$Manifest) {
     $zip = Join-Path $dist "firefox-video-enhancer-$Name-$firefoxVersion.zip"
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $zip) {
-        throw "ZIP em uso: feche/remova a extensão temporária antes de recompilar: $zip"
+        throw "ZIP is in use: close/remove the temporary extension before rebuilding: $zip"
     }
     $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
     try {
@@ -91,7 +92,7 @@ function New-Package([string]$Name, [string]$Manifest) {
             "manifest.json" -notin $entries -or
             "third_party/ravu-lite/ravu-lite-lut3.bin" -notin $entries -or
             "third_party/ravu-lite/ravu-lite-webgl2.js" -notin $entries) {
-            throw "ZIP $Name contém caminhos inválidos ou assets RAVU ausentes."
+            throw "ZIP $Name contains invalid paths or missing RAVU assets."
         }
     } finally {
         $archive.Dispose()
@@ -100,4 +101,4 @@ function New-Package([string]$Name, [string]$Manifest) {
 
 New-Package "firefox" $firefoxManifest
 New-Package "chromium" $chromiumManifest
-Write-Host "Pacotes $firefoxVersion criados em $dist"
+Write-Host "Packages $firefoxVersion created in $dist"
