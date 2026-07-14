@@ -1,4 +1,4 @@
-# Video Enhancer for Firefox
+# Video Enhancer
 
 ## What it does
 
@@ -12,8 +12,8 @@ There is no telemetry or data collection. The only permission is `storage`, used
 
 ## How to use
 
-1. Download the Firefox ZIP from [Releases](https://github.com/treeks12/video-enhancer/releases).
-2. Until the AMO build is signed, open `about:debugging#/runtime/this-firefox`, select **Load Temporary Add-on**, and choose the ZIP.
+1. Download the ZIP for Firefox or Chromium from [Releases](https://github.com/treeks12/video-enhancer/releases).
+2. Install it from your browser's extension store. For local testing, use `about:debugging#/runtime/this-firefox` in Firefox or enable Developer mode and **Load unpacked** in Chromium browsers.
 3. Open a page with video, click the extension icon, and select Native, FSR1, or RAVU.
 4. Enable interpolation only if you want to test 2× output on sources near 24/30 fps.
 
