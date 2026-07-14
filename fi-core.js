@@ -85,7 +85,7 @@ function fiBlockSad(prev, curr, w, h, bx, by, bw, bh, mx, my) {
 
 /**
  * Hierarchical block matching on luma planes (coarse then refine).
- * @returns {{ mvs: Float32Array, gridW: number, gridH: number, block: number, confidence: number, meanResidual: number }}
+ * @returns {{ mvs: Float32Array, confidences: Float32Array, gridW: number, gridH: number, block: number, confidence: number, meanResidual: number }}
  */
 function fiHierarchicalBlockMatch(prev, curr, w, h, options = {}) {
   const block = options.block || 16;
@@ -94,6 +94,7 @@ function fiHierarchicalBlockMatch(prev, curr, w, h, options = {}) {
   const gridW = Math.max(1, Math.floor(w / block));
   const gridH = Math.max(1, Math.floor(h / block));
   const mvs = new Float32Array(gridW * gridH * 2);
+  const confidences = new Float32Array(gridW * gridH);
   let residualSum = 0;
   let zeroSadSum = 0;
   let cells = 0;
@@ -140,8 +141,12 @@ function fiHierarchicalBlockMatch(prev, curr, w, h, options = {}) {
       }
 
       const idx = (gy * gridW + gx) * 2;
+      const ci = gy * gridW + gx;
       mvs[idx] = bestMx;
       mvs[idx + 1] = bestMy;
+      const localImprove = zeroSad > 1e-3 ? (zeroSad - bestSad) / zeroSad : 0;
+      const localResidualPenalty = Math.min(1, bestSad / 48);
+      confidences[ci] = Math.max(0, Math.min(1, localImprove * 0.7 + (1 - localResidualPenalty) * 0.3));
       residualSum += bestSad;
       zeroSadSum += zeroSad;
       cells++;
@@ -155,7 +160,42 @@ function fiHierarchicalBlockMatch(prev, curr, w, h, options = {}) {
   const residualPenalty = Math.min(1, meanResidual / 40);
   const confidence = Math.max(0, Math.min(1, improve * 0.65 + (1 - residualPenalty) * 0.35));
 
-  return { mvs, gridW, gridH, block, confidence, meanResidual, meanZero };
+  return { mvs, confidences, gridW, gridH, block, confidence, meanResidual, meanZero };
+}
+
+/** Local confidence after checking that forward and reverse vectors cancel. */
+function fiBidirectionalConsistency(forward, backward) {
+  if (!forward || !backward || forward.gridW !== backward.gridW ||
+      forward.gridH !== backward.gridH || forward.block !== backward.block) return null;
+  const count = forward.gridW * forward.gridH;
+  const refine = (match, reverse) => {
+    const confidences = new Float32Array(count);
+    let sum = 0;
+    for (let i = 0; i < count; i++) {
+      const gx = i % match.gridW;
+      const gy = Math.floor(i / match.gridW);
+      const mx = match.mvs[i * 2];
+      const my = match.mvs[i * 2 + 1];
+      const rx = Math.floor((gx * match.block + match.block * 0.5 + mx) / match.block);
+      const ry = Math.floor((gy * match.block + match.block * 0.5 + my) / match.block);
+      if (rx < 0 || ry < 0 || rx >= match.gridW || ry >= match.gridH) continue;
+      const ri = ry * match.gridW + rx;
+      const error = Math.hypot(mx + reverse.mvs[ri * 2], my + reverse.mvs[ri * 2 + 1]);
+      const tolerance = 1 + 0.5 * Math.hypot(mx, my);
+      const consistency = Math.max(0, 1 - error / tolerance);
+      const local = Math.min(match.confidences[i], reverse.confidences[ri]);
+      confidences[i] = local * (0.2 + 0.8 * consistency);
+      sum += confidences[i];
+    }
+    return { confidences, confidence: count ? sum / count : 0 };
+  };
+  const a = refine(forward, backward);
+  const b = refine(backward, forward);
+  return {
+    forward: a.confidences,
+    backward: b.confidences,
+    confidence: Math.sqrt(a.confidence * b.confidence),
+  };
 }
 
 /**
@@ -172,6 +212,25 @@ function fiWarpSampleOffsets(uvX, uvY, mvX, mvY, texelX, texelY, phase) {
     fromCurrX: uvX + mvX * (1 - t) * texelX,
     fromCurrY: uvY + mvY * (1 - t) * texelY,
   };
+}
+
+/** Phase of the delayed anchor pair at the display callback time. */
+function fiPresentationPhase(now, anchorTime, frameDurationMs) {
+  const elapsed = Number(now) - Number(anchorTime);
+  const duration = Number(frameDurationMs);
+  if (!Number.isFinite(elapsed) || !Number.isFinite(duration) || duration <= 0) return -1;
+  return Math.max(0, Math.min(1, elapsed / duration));
+}
+
+function fiMidFitsDeadline(phase, frameDurationMs, estimatedCostMs, marginMs = 2) {
+  const t = Number(phase);
+  const duration = Number(frameDurationMs);
+  const cost = Math.max(0, Number(estimatedCostMs) || 0);
+  const margin = Math.max(0, Number(marginMs) || 0);
+  if (!Number.isFinite(t) || !Number.isFinite(duration) || duration <= 0 || t <= 0 || t >= 1) {
+    return false;
+  }
+  return duration * (1 - t) >= cost + margin;
 }
 
 /**
@@ -260,6 +319,9 @@ function fiSelfCheck() {
   if (!(match.confidence > 0.15)) {
     throw new Error("fiSelfCheck: block match confidence too low: " + match.confidence);
   }
+  if (!(match.confidences && match.confidences.length === match.gridW * match.gridH)) {
+    throw new Error("fiSelfCheck: block match local confidences missing");
+  }
   // At least one MV should lean positive x (object moved right in curr → search finds +2)
   let maxAbs = 0;
   for (let i = 0; i < match.mvs.length; i += 2) {
@@ -267,6 +329,17 @@ function fiSelfCheck() {
   }
   if (maxAbs < 1) {
     throw new Error("fiSelfCheck: expected non-zero motion vectors");
+  }
+  const reverseMatch = fiHierarchicalBlockMatch(curr, prev, w, h, {
+    block: 8, coarseRange: 4, refineRange: 2,
+  });
+  const pair = fiBidirectionalConsistency(match, reverseMatch);
+  const brokenReverse = { ...reverseMatch, mvs: reverseMatch.mvs.slice() };
+  brokenReverse.mvs.fill(6);
+  const brokenPair = fiBidirectionalConsistency(match, brokenReverse);
+  if (!pair || !brokenPair || pair.confidence <= brokenPair.confidence ||
+      pair.forward.length !== match.confidences.length) {
+    throw new Error("fiSelfCheck: bidirectional consistency failed");
   }
 
   if (fiPickMethod({ infra: false, fpsOk: true }) !== "skip") {
@@ -324,13 +397,40 @@ function fiSelfCheck() {
   if (Math.abs(at0.fromPrevX - 0.5) > 1e-9 || Math.abs(at0.fromCurrX - 0.5 - 8 / 32) > 1e-9) {
     throw new Error("fiSelfCheck: warp phase 0 wrong " + JSON.stringify(at0));
   }
+  if (Math.abs(fiPresentationPhase(116, 100, 40) - 0.4) > 1e-9 ||
+      fiPresentationPhase(90, 100, 40) !== 0 ||
+      fiPresentationPhase(140, 100, 40) !== 1 ||
+      fiPresentationPhase(100, 100, 0) !== -1) {
+    throw new Error("fiSelfCheck: display phase calculation failed");
+  }
+  if (!fiMidFitsDeadline(0.4, 1000 / 24, 8) ||
+      fiMidFitsDeadline(0.8, 1000 / 24, 8) ||
+      !fiMidFitsDeadline(0.5, 1000 / 30, 10) ||
+      fiMidFitsDeadline(1, 1000 / 30, 0)) {
+    throw new Error("fiSelfCheck: mid-frame deadline gate failed");
+  }
+  const phasesAt60Hz = (sourceFps) => {
+    const duration = 1000 / sourceFps;
+    const phases = [];
+    for (let now = 1000 / 60; now < duration; now += 1000 / 60) {
+      phases.push(fiPresentationPhase(now, 0, duration));
+    }
+    return phases;
+  };
+  const phases24 = phasesAt60Hz(24);
+  const phases30 = phasesAt60Hz(30);
+  if (phases24.length !== 2 || Math.abs(phases24[0] - 0.4) > 1e-9 ||
+      Math.abs(phases24[1] - 0.8) > 1e-9 ||
+      phases30.length !== 1 || Math.abs(phases30[0] - 0.5) > 1e-9) {
+    throw new Error("fiSelfCheck: display-rate cadence failed");
+  }
   // Shader source must match pure helper (shipped string in content.js when co-loaded).
   if (typeof FI_WARP_FRAG === "string") {
-    if (!FI_WARP_FRAG.includes("v_uv - mv * t * u_texel") ||
-        !FI_WARP_FRAG.includes("v_uv + mv * (1.0 - t) * u_texel")) {
+    if (!FI_WARP_FRAG.includes("v_uv - forwardMv * t * u_texel") ||
+        !FI_WARP_FRAG.includes("v_uv - backwardMv * (1.0 - t) * u_texel")) {
       throw new Error("fiSelfCheck: FI_WARP_FRAG sampling direction mismatch");
     }
-    if (FI_WARP_FRAG.includes("v_uv + mv * t * u_texel")) {
+    if (FI_WARP_FRAG.includes("v_uv + forwardMv * t * u_texel")) {
       throw new Error("fiSelfCheck: FI_WARP_FRAG still has inverted fromPrev");
     }
   }

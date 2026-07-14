@@ -30,7 +30,11 @@ Licensed under the GNU Lesser General Public License, version 3 or later.
 The complete license and original preferred source are distributed in:
 
   third_party/ravu-lite/LICENSE
+  third_party/ravu-lite/GPL-3.0.txt
   third_party/ravu-lite/ravu-lite-ar-r3.hook
+
+GPL-3.0.txt is the unmodified GNU General Public License, version 3,
+distributed alongside the GNU Lesser General Public License, version 3.
 
 Local modifications are in third_party/ravu-lite/ravu-lite-webgl2.js:
 the mpv hook interface was ported to WebGL2, RGB input is converted to

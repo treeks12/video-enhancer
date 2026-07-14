@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RIFE ONNX WebGPU benchmark</title>
+<style>
+  :root { color-scheme: dark; font: 15px/1.45 system-ui, sans-serif; }
+  body { max-width: 1100px; margin: 24px auto; padding: 0 16px; background: #111; color: #eee; }
+  button { padding: 9px 14px; font: inherit; cursor: pointer; }
+  button:disabled { cursor: wait; opacity: .6; }
+  .frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0; }
+  figure { margin: 0; }
+  img, canvas { display: block; width: 100%; aspect-ratio: 16/9; background: #000; }
+  figcaption { margin-top: 5px; color: #aaa; }
+  pre { min-height: 11em; padding: 12px; overflow: auto; background: #191919; border: 1px solid #333; }
+  .pass { color: #69e69a; } .fail { color: #ff8b8b; }
+  @media (max-width: 720px) { .frames { grid-template-columns: 1fr; } }
+</style>
+
+<h1>RIFE ONNX · WebGPU/WASM</h1>
+<p>Harness isolado: <span id="shape">640×360</span>, entrada e saída em CPU para medir também upload/readback.</p>
+<button id="run">Carregar e medir</button>
+<strong id="verdict"></strong>
+
+<div class="frames">
+  <figure><img id="frameA" src="frame-a.svg" alt="Frame A sintético"><figcaption>Frame A</figcaption></figure>
+  <figure><canvas id="output"></canvas><figcaption>RIFE t=0,5</figcaption></figure>
+  <figure><img id="frameB" src="frame-b.svg" alt="Frame B sintético"><figcaption>Frame B</figcaption></figure>
+</div>
+
+<pre id="report">Execute vendor.ps1 antes de abrir esta página.</pre>
+
+<script src="vendor/ort.webgpu.min.js"></script>
+<script src="benchmark.js"></script>

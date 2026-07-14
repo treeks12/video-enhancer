@@ -1,4 +1,5 @@
 "use strict";
+const ext = globalThis.browser ?? globalThis.chrome;
 /*
  * Firefox Video Enhancer
  *
@@ -46,7 +47,7 @@ function pickLargestVideo(videos, vw, vh) {
 }
 
 const DEFAULT_SETTINGS = Object.freeze({
-  mode: "ravu",
+  mode: "off",
   strength: 100,
   outline: false,
   compare: false,
@@ -75,7 +76,7 @@ function normalizeSettings(value = {}) {
       fiFallback: value.fiFallback !== false,
     };
   return {
-    mode: ["off", "rcas", "ravu"].includes(mode) ? mode : DEFAULT_SETTINGS.mode,
+    mode: ["off", "native", "rcas", "ravu"].includes(mode) ? mode : DEFAULT_SETTINGS.mode,
     strength: Number.isFinite(strength)
       ? Math.min(100, Math.max(0, Math.round(strength)))
       : DEFAULT_SETTINGS.strength,
@@ -241,26 +242,37 @@ const FI_WARP_FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D u_prev;
 uniform sampler2D u_curr;
-uniform sampler2D u_mv;
+uniform sampler2D u_mv_forward;
+uniform sampler2D u_mv_backward;
 uniform vec2 u_texel;
 uniform vec2 u_mv_grid;
 uniform float u_phase;
 in vec2 v_uv;
 out vec4 outColor;
 void main() {
-  // MV texture: RG = motion of curr relative to prev, in source pixels.
-  vec2 cell = clamp(floor(v_uv * u_mv_grid), vec2(0.0), u_mv_grid - 1.0);
-  vec2 mvUv = (cell + 0.5) / u_mv_grid;
-  // Packed as (pixel*4 + 128) / 255 in RG — decode back to source pixels.
+  // MV texture: RG = motion of curr relative to prev, A = local confidence.
+  // Sample continuously instead of by cell; hard cells show up as square artifacts.
+  vec2 halfCell = 0.5 / u_mv_grid;
+  vec2 mvUv = clamp(v_uv, halfCell, vec2(1.0) - halfCell);
+  vec4 packedForward = texture(u_mv_forward, mvUv);
+  vec4 packedBackward = texture(u_mv_backward, mvUv);
+  // Packed as (pixel*4 + 128) / 255 in RG — decode back to luma-sample pixels.
   // ME defines mv so curr[p+mv] ≈ prev[p] (feature moves +mv from prev→curr).
   // Mid at phase t: sample prev at p - mv*t, curr at p + mv*(1-t).
-  vec2 mv = (texture(u_mv, mvUv).rg * 255.0 - 128.0) / 4.0;
+  float forwardConfidence = smoothstep(0.15, 0.8, packedForward.a);
+  float backwardConfidence = smoothstep(0.15, 0.8, packedBackward.a);
+  vec2 forwardMv = (packedForward.rg * 255.0 - 128.0) / 4.0;
+  vec2 backwardMv = (packedBackward.rg * 255.0 - 128.0) / 4.0;
   float t = clamp(u_phase, 0.0, 1.0);
-  vec2 fromPrev = v_uv - mv * t * u_texel;
-  vec2 fromCurr = v_uv + mv * (1.0 - t) * u_texel;
+  vec2 fromPrev = v_uv - forwardMv * t * u_texel;
+  vec2 fromCurr = v_uv - backwardMv * (1.0 - t) * u_texel;
   vec3 a = texture(u_prev, clamp(fromPrev, vec2(0.0), vec2(1.0))).rgb;
   vec3 b = texture(u_curr, clamp(fromCurr, vec2(0.0), vec2(1.0))).rgb;
-  outColor = vec4(mix(a, b, t), 1.0);
+  float wa = (1.0 - t) * forwardConfidence;
+  float wb = t * backwardConfidence;
+  vec3 warped = (a * wa + b * wb) / max(wa + wb, 1e-4);
+  vec3 blended = mix(texture(u_prev, v_uv).rgb, texture(u_curr, v_uv).rgb, t);
+  outColor = vec4(mix(blended, warped, max(forwardConfidence, backwardConfidence)), 1.0);
 }`;
 
 const FRAG = `#version 300 es
@@ -333,6 +345,8 @@ let ravuFramebuffer, ravuPackedTexture, ravuLutTexture;
 let ravuWidth = 0, ravuHeight = 0;
 let ravuLutReady = false, ravuLutPromise = null, ravuLutError = "";
 let ravuShadersPromise = null, ravuShaderError = "";
+let ravuRetryPromise = null, ravuPendingCaptureVideo = null;
+let ravuRetryGeneration = 0;
 let ravuFloatTarget = false, ravuFloatChecked = false;
 let textureWidth = 0, textureHeight = 0;
 let timerExt = null;
@@ -346,8 +360,6 @@ let hiddenVideo = null;
 let hiddenVideoOpacity = "";
 let rafId = null;
 let scheduledKind = null;
-let schedulerMode = "video";
-let lastDisplayDrawTime = 0;
 let stopped = false;
 let overlayVisible = true;
 let scrolling = false;
@@ -366,6 +378,10 @@ let settingsLoaded = false;
 let settings = normalizeSettings(DEFAULT_SETTINGS);
 let lastPresentedFrames = null;
 let lastMediaTime = null;
+let lastExpectedDisplayTime = null;
+let lastVideoCallbackTime = null;
+let lastVideoFrameDurationMs = 0;
+let fiResumeGap = false;
 let lastPlaybackDropped = null;
 let lastPlaybackTotal = null;
 let renderScale = 1;
@@ -385,7 +401,7 @@ let lastRavuOutTexelX = NaN, lastRavuOutTexelY = NaN;
 let lastRavuCompare = NaN;
 let metricWindow = null;
 let metricReport = {
-  fps: 0, videoFps: 0, missed: 0, missedPct: 0, latePct: null,
+  fps: 0, midFps: 0, videoFps: 0, missed: 0, missedPct: 0, latePct: null,
   videoDropped: 0, videoDroppedPct: 0,
   cpuMs: 0, cpuMaxMs: 0, gpuMs: null, decoderMs: null,
   renderScale: 1,
@@ -396,8 +412,11 @@ let metricReport = {
 // --------------------------------------------------------------------------
 let fiPrevTexture = null;
 let fiCurrTexture = null;
+let fiTextureW = 0;
+let fiTextureH = 0;
 let fiOutTexture = null;
-let fiMvTexture = null;
+let fiForwardMvTexture = null;
+let fiBackwardMvTexture = null;
 let fiOutFb = null;
 let fiCopyFb = null; // dedicated FBO for texture copies — never share with fiOutFb
 let fiHasPrev = false;
@@ -408,7 +427,6 @@ let fiLumaW = 0;
 let fiLumaH = 0;
 let fiSampleCanvas = null;
 let fiSampleCtx = null;
-let fiMidTimer = null;
 let fiMidRaf = null;
 let fiMethod = "skip";
 let fiConfidence = 0;
@@ -416,15 +434,17 @@ let fiSceneCutHold = 0;
 let fiFpsEligible = false;
 let fiFpsEligibleSticky = false;
 let fiLastMatch = null;
+let fiLastBackwardMatch = null;
 let fiBlendProgram = null;
 let fiWarpProgram = null;
 let fiBlendPrevLoc = null, fiBlendCurrLoc = null, fiBlendPhaseLoc = null;
-let fiWarpPrevLoc = null, fiWarpCurrLoc = null, fiWarpMvLoc = null;
+let fiWarpPrevLoc = null, fiWarpCurrLoc = null;
+let fiWarpForwardMvLoc = null, fiWarpBackwardMvLoc = null;
 let fiWarpTexelLoc = null, fiWarpGridLoc = null, fiWarpPhaseLoc = null;
 let fiOutW = 0, fiOutH = 0;
-let fiDrawingMid = false;
-let fiMidDrawsWindow = 0;
-let fiRealDrawsWindow = 0;
+let fiPairSerial = 0;
+let fiLatencyActive = false;
+let fiLastPresentation = "current";
 let fiMidPerSec = 0;
 let fiRealPerSec = 0;
 let fiLastExplain = "";
@@ -494,7 +514,8 @@ function updateCanvasVisibility() {
 function modeDisplayName(mode) {
   if (mode === "ravu") return "RAVU";
   if (mode === "rcas") return "FSR1";
-  return "Enhanced";
+  if (mode === "native") return "Nativo";
+  return "Desativado";
 }
 
 function applyCanvasOutline(flashing = false) {
@@ -627,12 +648,23 @@ function setRavuComposeUniforms(sourceW, sourceH, outTexelX, outTexelY, compare)
 
 function resetMetricWindow(now) {
   metricWindow = {
-    start: now, callbacks: 0, drawn: 0, missed: 0, late: 0,
+    start: now, callbacks: 0, realDrawn: 0, midDrawn: 0, missed: 0, late: 0,
     cpuTotal: 0, cpuMax: 0, cpuSamples: 0, gpuTotal: 0, gpuSamples: 0,
     decoderTotal: 0, decoderSamples: 0, hasMetadata: false,
     mediaDelta: 0, mediaFrames: 0,
     videoDropped: 0, videoTotal: 0,
   };
+}
+
+function resetVideoFrameHistory() {
+  lastPresentedFrames = null;
+  lastMediaTime = null;
+  lastExpectedDisplayTime = null;
+  lastVideoCallbackTime = null;
+  lastVideoFrameDurationMs = 0;
+  lastPlaybackDropped = null;
+  lastPlaybackTotal = null;
+  fiResumeGap = false;
 }
 
 function setRenderScale(value, reason) {
@@ -676,24 +708,59 @@ function autoScaleCap(width, height, fps = 60) {
   return 1;
 }
 
-function shouldUseDisplayScheduler(report) {
-  return report.videoFps > 0 && report.missedPct > 10 &&
-    report.videoFps > report.fps * 1.25;
-}
-
-function displayPollDelay(lastDraw, now, fps) {
-  if (!lastDraw || fps <= 0) return 0;
-  return Math.max(0, 1000 / fps - (now - lastDraw) - 2);
-}
-
 function adjustedRcasStrength(strength, upscaleRatio) {
   const haloProtection = Math.max(0.7, 1 - 0.15 * Math.max(0, upscaleRatio - 1));
   return strength * haloProtection;
 }
 
+function fiOutputFps(sourceFps, enabled) {
+  const fps = Number(sourceFps);
+  return Number.isFinite(fps) && fps > 0 ? fps * (enabled ? 2 : 1) : 0;
+}
+
+function shouldUseRavu(sourceW, sourceH, outputW, outputH, quality) {
+  return quality === "high" || outputW > sourceW || outputH > sourceH;
+}
+
+function fiFrameDurationMs(expectedDeltaMs, mediaDeltaSeconds, presentedDelta, playbackRate) {
+  const frames = Math.max(1, Number(presentedDelta) || 1);
+  const rate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1;
+  if (Number.isFinite(mediaDeltaSeconds) && mediaDeltaSeconds > 0 && mediaDeltaSeconds < 1) {
+    return mediaDeltaSeconds * 1000 / rate / frames;
+  }
+  if (Number.isFinite(expectedDeltaMs) && expectedDeltaMs > 0 && expectedDeltaMs <= 500) {
+    return expectedDeltaMs / frames;
+  }
+  return 0;
+}
+
+function fiIsTimingGap(deltaMs, frameDurationMs) {
+  if (!Number.isFinite(deltaMs) || deltaMs <= 0) return false;
+  const nominal = Number.isFinite(frameDurationMs) && frameDurationMs > 0
+    ? frameDurationMs
+    : 1000 / 30;
+  return deltaMs > Math.max(250, nominal * 3);
+}
+
+function fiLatencyEnabled(infra, fpsGate, fpsEligible, hasPair) {
+  return Boolean(infra && hasPair && (!fpsGate || fpsEligible));
+}
+
+function frameDrawKind(options = {}) {
+  if (options.fiMid === true) return "mid";
+  if (options.newVideoFrame === true) return "capture";
+  return "redraw";
+}
+
 function adaptRenderScale(report) {
   if (settings.quality !== "auto") return;
-  const next = selectAutoScale(renderScale, stableWindows, report);
+  const next = selectAutoScale(renderScale, stableWindows, {
+    ...report,
+    videoFps: fiOutputFps(
+      report.videoFps,
+      settings.fiInfra && fiFpsEligibleSticky,
+    ),
+  });
   next.scale = Math.min(
     next.scale,
     autoScaleCap(targetWidth, targetHeight, report.videoFps || 60),
@@ -707,13 +774,10 @@ function adaptRenderScale(report) {
 
 function fiExplainStatus() {
   if (!settings.fiInfra) {
-    return "Suavização desligada. Use o interruptor “Suavizar movimento” para tentar 2× em vídeos 24/30 fps.";
-  }
-  if (settings.mode === "ravu") {
-    return "Com RAVU ligado, os meios 2× ficam desativados de propósito: RAVU já é pesado e um meio “barato” no meio causa stutter (nitidez oscila). Use FSR1 + suavização, ou só RAVU sem 2×.";
+    return "Suavização desligada. Ligue para gerar um meio por par (até 2×) em vídeos 24/30 fps.";
   }
   if (settings.fiFpsGate && !fiFpsEligibleSticky) {
-    return `Fonte ~${(metricReport.videoFps || 0).toFixed(0)} fps: 2× não se aplica (só ~24/30).`;
+    return `Fonte ~${(metricReport.videoFps || 0).toFixed(0)} fps: FI não se aplica (só ~24/30).`;
   }
   if (!fiHasPrev || !fiHasCurr) {
     return "Aguardando o segundo frame do vídeo para montar o par…";
@@ -727,41 +791,36 @@ function fiExplainStatus() {
     return "Infra ligada, sem meios neste momento (orçamento ou confiança).";
   }
   if (mids < 1 && reals > 5) {
-    return "Sem meios estáveis — priorizando cadência limpa em vez de forçar 2× engasgado.";
+    return "Sem meios estáveis — priorizando a cadência real em vez de forçar frames atrasados.";
   }
   return `Meios de movimento ~${mids.toFixed(0)}/s · âncoras ~${reals.toFixed(0)}/s · confiança ${(fiConfidence * 100).toFixed(0)}%. Se engasgar, desligue a suavização ou use FSR1.`;
 }
 
 /**
  * Smoothness-first gate: only present a mid when it is likely to help, not hurt.
- * - No mid under RAVU (quality flicker + CPU).
- * - No blend/duplicate mids (ghosting feels like stutter).
  * - No mid if last real frame already ate the frame budget.
  */
 function fiShouldPresentMid() {
+  const priorSkipReason = fiSkipReason;
   fiSkipReason = "";
-  if (!settings.fiInfra || fiMethod === "skip") return false;
+  if (!settings.fiInfra || fiMethod === "skip") {
+    if (priorSkipReason) fiSkipReason = priorSkipReason;
+    return false;
+  }
   if (!fiHasPrev || !fiHasCurr) return false;
   if (settings.fiFpsGate && !fiFpsEligibleSticky) {
     fiSkipReason = "Fonte fora da faixa 24/30 — meios não agendados.";
     return false;
   }
-  if (settings.mode === "ravu") {
-    fiSkipReason =
-      "RAVU + meio-frame = engasgo. Meios desligados; mantenha só RAVU ou troque para FSR1 + suavização.";
+  if (fiMethod === "duplicate") {
+    fiSkipReason = "Cena ou movimento incerto — mantendo a cadência real, sem duplicar o pipeline.";
     return false;
   }
-  if (fiMethod === "blend" || fiMethod === "duplicate") {
-    fiSkipReason =
-      `Confiança ${(fiConfidence * 100).toFixed(0)}% → mistura/cópia engasga mais do que ajuda; meio ignorado. ` +
-      "Em Avançado, desligue “Fallback” para tentar só block match, ou aceite 24 fps limpo.";
-    return false;
-  }
-  if (fiMethod !== "block") return false;
+  if (!["block", "blend"].includes(fiMethod)) return false;
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
-  const budget = 1000 / fps;
-  // Real frame must leave headroom for a cheap mid before the next anchor.
-  if (fiLastRealCpuMs > budget * 0.42) {
+  const budget = 1000 / fiOutputFps(fps, true);
+  // Real frame must leave headroom for a mid + delayed anchor before the next pair.
+  if (fiLastRealCpuMs > budget * 0.75) {
     fiSkipReason =
       `Último frame real ${fiLastRealCpuMs.toFixed(1)} ms (orçamento ~${budget.toFixed(0)} ms) — meio cancelado para não engasgar.`;
     return false;
@@ -772,13 +831,12 @@ function fiShouldPresentMid() {
 function publishMetrics(now) {
   if (!metricWindow || metricWindow.callbacks === 0 || now - metricWindow.start < 1000) return;
   const elapsed = now - metricWindow.start;
-  const totalFrames = metricWindow.drawn + metricWindow.missed;
-  fiMidPerSec = fiMidDrawsWindow * 1000 / elapsed;
-  fiRealPerSec = fiRealDrawsWindow * 1000 / elapsed;
-  fiMidDrawsWindow = 0;
-  fiRealDrawsWindow = 0;
+  const totalFrames = metricWindow.realDrawn + metricWindow.missed;
+  fiMidPerSec = metricWindow.midDrawn * 1000 / elapsed;
+  fiRealPerSec = metricWindow.realDrawn * 1000 / elapsed;
   metricReport = {
-    fps: metricWindow.drawn * 1000 / elapsed,
+    fps: metricWindow.realDrawn * 1000 / elapsed,
+    midFps: metricWindow.midDrawn * 1000 / elapsed,
     videoFps: metricWindow.mediaDelta
       ? metricWindow.mediaFrames / metricWindow.mediaDelta
       : (metricWindow.videoTotal ? metricWindow.videoTotal * 1000 / elapsed : 0),
@@ -802,10 +860,6 @@ function publishMetrics(now) {
     renderScale: effectiveRenderScale(),
   };
   fiLastExplain = fiExplainStatus();
-  if (schedulerMode === "video" && shouldUseDisplayScheduler(metricReport)) {
-    schedulerMode = "display";
-    log("rVFC perdeu frames; trocando para sincronização com a tela");
-  }
   if (canRender()) adaptRenderScale(metricReport);
   metricReport.renderScale = effectiveRenderScale();
   resetMetricWindow(now);
@@ -814,9 +868,11 @@ function publishMetrics(now) {
 function recordVideoFrame(now, metadata) {
   if (!metricWindow) resetMetricWindow(now);
   metricWindow.callbacks++;
+  fiResumeGap = false;
+  const callbackDelta = lastVideoCallbackTime === null ? 0 : now - lastVideoCallbackTime;
+  lastVideoCallbackTime = now;
   let qualityDelta = null;
-  const needsQuality = (!metadata && !scrolling) || schedulerMode === "display" ||
-    metricWindow.callbacks % 15 === 0;
+  const needsQuality = (!metadata && !scrolling) || metricWindow.callbacks % 15 === 0;
   const quality = needsQuality && currentVideo && currentVideo.getVideoPlaybackQuality
     ? currentVideo.getVideoPlaybackQuality()
     : null;
@@ -827,15 +883,17 @@ function recordVideoFrame(now, metadata) {
     if (lastPlaybackTotal !== null && quality.totalVideoFrames >= lastPlaybackTotal) {
       qualityDelta = quality.totalVideoFrames - lastPlaybackTotal;
       metricWindow.videoTotal += qualityDelta;
-      if (schedulerMode === "display" && canRender() &&
-          qualityDelta > 1) {
+      if (!metadata && canRender() && qualityDelta > 1) {
         metricWindow.missed += qualityDelta - 1;
       }
     }
     lastPlaybackDropped = quality.droppedVideoFrames;
     lastPlaybackTotal = quality.totalVideoFrames;
   }
-  if (!metadata) return qualityDelta === null || qualityDelta > 0;
+  if (!metadata) {
+    fiResumeGap = fiIsTimingGap(callbackDelta, lastVideoFrameDurationMs);
+    return qualityDelta === null || qualityDelta > 0;
+  }
   metricWindow.hasMetadata = true;
   let presentedDelta = 1;
   if (lastPresentedFrames !== null) {
@@ -845,16 +903,35 @@ function recordVideoFrame(now, metadata) {
       metadata.presentedFrames > lastPresentedFrames + 1) {
     metricWindow.missed += metadata.presentedFrames - lastPresentedFrames - 1;
   }
+  const expectedTime = Number(metadata.expectedDisplayTime);
+  const expectedDelta = Number.isFinite(expectedTime) && lastExpectedDisplayTime !== null
+    ? expectedTime - lastExpectedDisplayTime
+    : NaN;
+  const mediaDelta = lastMediaTime === null ? NaN : metadata.mediaTime - lastMediaTime;
+  const playbackRate = currentVideo && Number(currentVideo.playbackRate) > 0
+    ? Number(currentVideo.playbackRate)
+    : 1;
+  const wallDelta = Number.isFinite(expectedDelta)
+    ? expectedDelta
+    : (Number.isFinite(mediaDelta) ? mediaDelta * 1000 / playbackRate : callbackDelta);
+  // A skipped callback is already counted above; resetting the delayed pair here
+  // would jump current -> previous again and turn one miss into visible stutter.
+  fiResumeGap = fiIsTimingGap(wallDelta, lastVideoFrameDurationMs);
+  const duration = fiFrameDurationMs(
+    expectedDelta, mediaDelta, presentedDelta, playbackRate,
+  );
+  if (!fiResumeGap && duration > 0) lastVideoFrameDurationMs = duration;
+
   lastPresentedFrames = metadata.presentedFrames;
   if (lastMediaTime !== null) {
-    const delta = metadata.mediaTime - lastMediaTime;
-    if (delta > 0 && delta < 1) {
-      metricWindow.mediaDelta += delta;
+    if (mediaDelta > 0 && mediaDelta < 1) {
+      metricWindow.mediaDelta += mediaDelta;
       metricWindow.mediaFrames += presentedDelta;
     }
   }
   lastMediaTime = metadata.mediaTime;
-  if (metadata.expectedDisplayTime - now < 1) metricWindow.late++;
+  lastExpectedDisplayTime = Number.isFinite(expectedTime) ? expectedTime : null;
+  if (Number.isFinite(expectedTime) && expectedTime - now < 1) metricWindow.late++;
   if (Number.isFinite(metadata.processingDuration)) {
     metricWindow.decoderTotal += metadata.processingDuration * 1000;
     metricWindow.decoderSamples++;
@@ -862,10 +939,10 @@ function recordVideoFrame(now, metadata) {
   return true;
 }
 
-function recordDraw(cpuMs) {
+function recordDraw(cpuMs, isFiMid = false) {
   if (!metricWindow) resetMetricWindow(performance.now());
-  metricWindow.drawn++;
-  if (Number.isFinite(cpuMs)) {
+  metricWindow[isFiMid ? "midDrawn" : "realDrawn"]++;
+  if (!isFiMid && Number.isFinite(cpuMs)) {
     metricWindow.cpuSamples++;
     metricWindow.cpuTotal += cpuMs;
     metricWindow.cpuMax = Math.max(metricWindow.cpuMax, cpuMs);
@@ -887,10 +964,6 @@ function pollGpuTimers() {
 }
 
 function cancelFiMid() {
-  if (fiMidTimer !== null) {
-    clearTimeout(fiMidTimer);
-    fiMidTimer = null;
-  }
   if (fiMidRaf !== null) {
     cancelAnimationFrame(fiMidRaf);
     fiMidRaf = null;
@@ -909,7 +982,12 @@ function resetFiPairState() {
   fiConfidence = 0;
   fiSceneCutHold = 0;
   fiLastMatch = null;
-  fiDrawingMid = false;
+  fiLastBackwardMatch = null;
+  fiLastRealCpuMs = 0;
+  fiSkipReason = "";
+  fiLatencyActive = false;
+  fiLastPresentation = "current";
+  fiPairSerial++;
 }
 
 function fiMakeTexture() {
@@ -932,7 +1010,8 @@ function fiEnsurePrograms() {
   fiBlendPhaseLoc = gl.getUniformLocation(fiBlendProgram, "u_phase");
   fiWarpPrevLoc = gl.getUniformLocation(fiWarpProgram, "u_prev");
   fiWarpCurrLoc = gl.getUniformLocation(fiWarpProgram, "u_curr");
-  fiWarpMvLoc = gl.getUniformLocation(fiWarpProgram, "u_mv");
+  fiWarpForwardMvLoc = gl.getUniformLocation(fiWarpProgram, "u_mv_forward");
+  fiWarpBackwardMvLoc = gl.getUniformLocation(fiWarpProgram, "u_mv_backward");
   fiWarpTexelLoc = gl.getUniformLocation(fiWarpProgram, "u_texel");
   fiWarpGridLoc = gl.getUniformLocation(fiWarpProgram, "u_mv_grid");
   fiWarpPhaseLoc = gl.getUniformLocation(fiWarpProgram, "u_phase");
@@ -942,8 +1021,18 @@ function fiEnsurePrograms() {
   gl.useProgram(fiWarpProgram);
   gl.uniform1i(fiWarpPrevLoc, 0);
   gl.uniform1i(fiWarpCurrLoc, 1);
-  gl.uniform1i(fiWarpMvLoc, 2);
+  gl.uniform1i(fiWarpForwardMvLoc, 2);
+  gl.uniform1i(fiWarpBackwardMvLoc, 3);
   return true;
+}
+
+function warmFiPrograms() {
+  if (!settings.fiInfra || !gl || (fiBlendProgram && fiWarpProgram)) return;
+  queueMicrotask(() => {
+    if (settings.fiInfra && gl && !fiEnsurePrograms()) {
+      log("FI shaders indisponíveis:", lastError);
+    }
+  });
 }
 
 function fiBindOutTarget() {
@@ -973,8 +1062,6 @@ function fiEnsureOut(w, h) {
 function fiCopyTexture(src, dst, w, h) {
   // Use a dedicated copy FBO so COLOR_ATTACHMENT0 on fiOutFb always stays fiOutTexture.
   if (!fiCopyFb) fiCopyFb = gl.createFramebuffer();
-  gl.bindTexture(gl.TEXTURE_2D, dst);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
   gl.bindFramebuffer(gl.FRAMEBUFFER, fiCopyFb);
   gl.framebufferTexture2D(
     gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, src, 0,
@@ -984,24 +1071,40 @@ function fiCopyTexture(src, dst, w, h) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
+function fiEnsureFrameTextures(w, h) {
+  if (!fiPrevTexture) fiPrevTexture = fiMakeTexture();
+  if (!fiCurrTexture) fiCurrTexture = fiMakeTexture();
+  if (fiTextureW === w && fiTextureH === h) return;
+  resetFiPairState();
+  for (const tex of [fiPrevTexture, fiCurrTexture]) {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  }
+  fiTextureW = w;
+  fiTextureH = h;
+}
+
+function fiLumaSampleSize(srcW, srcH, halfLuma) {
+  // ponytail: CPU block matching must stay tiny; upscale can sharpen artifacts,
+  // but it must never steal the frame budget from playback/scroll.
+  const maxW = halfLuma ? 160 : 240;
+  const maxH = halfLuma ? 90 : 135;
+  const scale = Math.min(1, maxW / srcW, maxH / srcH);
+  let tw = Math.max(16, Math.round(srcW * scale));
+  let th = Math.max(16, Math.round(srcH * scale));
+  // keep block grid friendly
+  tw = Math.max(16, tw - (tw % 8));
+  th = Math.max(16, th - (th % 8));
+  return { width: tw, height: th };
+}
+
 function fiUpdateLumaSample(video) {
   const srcW = video.videoWidth;
   const srcH = video.videoHeight;
   if (!srcW || !srcH) return;
-  let tw = srcW;
-  let th = srcH;
-  if (settings.fiHalfLuma) {
-    tw = Math.max(16, Math.round(srcW / 4));
-    th = Math.max(16, Math.round(srcH / 4));
-    // keep aspect-ish block grid friendly
-    tw = Math.max(16, tw - (tw % 8));
-    th = Math.max(16, th - (th % 8));
-  } else {
-    tw = Math.min(srcW, 320);
-    th = Math.min(srcH, 180);
-    tw = Math.max(16, tw - (tw % 8));
-    th = Math.max(16, th - (th % 8));
-  }
+  const size = fiLumaSampleSize(srcW, srcH, settings.fiHalfLuma);
+  const tw = size.width;
+  const th = size.height;
   if (!fiSampleCanvas) {
     fiSampleCanvas = document.createElement("canvas");
     fiSampleCtx = fiSampleCanvas.getContext("2d", { willReadFrequently: true });
@@ -1025,31 +1128,59 @@ function fiUpdateLumaSample(video) {
   }
 }
 
-function fiUploadMvTexture(match) {
+function fiUploadMvTexture(match, texture) {
   if (!match) return;
-  if (!fiMvTexture) {
-    fiMvTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, fiMvTexture);
+  if (!texture) {
+    texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   }
   const { gridW, gridH, mvs } = match;
-  // Pack mx,my into RG float via RGBA8 normalized ±32 px
+  const confidences = match.confidences;
+  // Pack mx,my into RG and local confidence into A.
   const data = new Uint8Array(gridW * gridH * 4);
   for (let i = 0, p = 0; i < gridW * gridH; i++, p += 4) {
-    const mx = mvs[i * 2];
-    const my = mvs[i * 2 + 1];
+    const gx = i % gridW;
+    const gy = Math.floor(i / gridW);
+    let c = confidences ? confidences[i] : match.confidence;
+    let sumX = 0;
+    let sumY = 0;
+    let sumW = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = gx + dx;
+        const ny = gy + dy;
+        if (nx < 0 || ny < 0 || nx >= gridW || ny >= gridH) continue;
+        const ni = ny * gridW + nx;
+        const w = 0.05 + (confidences ? confidences[ni] : match.confidence);
+        sumX += mvs[ni * 2] * w;
+        sumY += mvs[ni * 2 + 1] * w;
+        sumW += w;
+      }
+    }
+    const avgX = sumW ? sumX / sumW : mvs[i * 2];
+    const avgY = sumW ? sumY / sumW : mvs[i * 2 + 1];
+    let mx = mvs[i * 2] * 0.55 + avgX * 0.45;
+    let my = mvs[i * 2 + 1] * 0.55 + avgY * 0.45;
+    const outlier = Math.hypot(mvs[i * 2] - avgX, mvs[i * 2 + 1] - avgY);
+    if (outlier > 2.5) {
+      mx = avgX;
+      my = avgY;
+      c *= 0.45;
+    }
     data[p] = Math.max(0, Math.min(255, Math.round(mx * 4 + 128)));
     data[p + 1] = Math.max(0, Math.min(255, Math.round(my * 4 + 128)));
     data[p + 2] = 0;
-    data[p + 3] = 255;
+    data[p + 3] = Math.max(0, Math.min(255, Math.round(c * 255)));
   }
-  gl.bindTexture(gl.TEXTURE_2D, fiMvTexture);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texImage2D(
     gl.TEXTURE_2D, 0, gl.RGBA, gridW, gridH, 0, gl.RGBA, gl.UNSIGNED_BYTE, data,
   );
+  return texture;
 }
 
 function fiDecodeMvScale() {
@@ -1057,7 +1188,7 @@ function fiDecodeMvScale() {
   return 1 / 4;
 }
 
-function fiComputeDecision() {
+function fiUpdateFpsEligibility() {
   const fps = metricReport.videoFps || 0;
   fiFpsEligibleSticky = typeof fiFpsAllows2xSticky === "function"
     ? fiFpsAllows2xSticky(fps, fiFpsEligibleSticky)
@@ -1065,10 +1196,15 @@ function fiComputeDecision() {
   fiFpsEligible = typeof fiFpsAllows2x === "function"
     ? fiFpsAllows2x(fps)
     : fiFpsEligibleSticky;
+}
+
+function fiComputeDecision() {
+  const fps = metricReport.videoFps || 0;
 
   let sceneCut = false;
   let confidence = 0.5;
   fiLastMatch = null;
+  fiLastBackwardMatch = null;
 
   if (fiPrevLuma && fiCurrLuma && fiPrevLuma.length === fiCurrLuma.length) {
     const score = typeof fiSceneCutScore === "function"
@@ -1082,22 +1218,39 @@ function fiComputeDecision() {
       fiSceneCutHold -= 1;
     }
 
-    if (settings.fiBlockMatch && typeof fiHierarchicalBlockMatch === "function") {
+    const fpsBudget = 1000 / fiOutputFps(fps || 30, true);
+    const hasBudget = !fiLastRealCpuMs || fiLastRealCpuMs < fpsBudget * 0.6;
+    if (!hasBudget) {
+      fiConfidence = 0;
+      fiMethod = "skip";
+      fiSkipReason =
+        `Orçamento estourado (${fiLastRealCpuMs.toFixed(1)} ms); pulando estimativa de movimento.`;
+      return fiMethod;
+    }
+    if (!sceneCut && settings.fiBlockMatch && hasBudget &&
+        typeof fiHierarchicalBlockMatch === "function") {
+      // ponytail: bidirectional CPU match stays on the 160×90 sample; move this pair
+      // to a WebGL pyramid only if capture p95 starts missing the frame budget.
       fiLastMatch = fiHierarchicalBlockMatch(
         fiPrevLuma, fiCurrLuma, fiLumaW, fiLumaH,
-        { block: 8, coarseRange: 4, refineRange: 2 },
+        { block: 8, coarseRange: 3, refineRange: 1 },
       );
-      confidence = fiLastMatch.confidence;
-      // Scale MVs from luma grid pixels to full video pixels
-      if (currentVideo && currentVideo.videoWidth && fiLumaW) {
-        const sx = currentVideo.videoWidth / fiLumaW;
-        const sy = currentVideo.videoHeight / fiLumaH;
-        for (let i = 0; i < fiLastMatch.mvs.length; i += 2) {
-          fiLastMatch.mvs[i] *= sx;
-          fiLastMatch.mvs[i + 1] *= sy;
-        }
+      fiLastBackwardMatch = fiHierarchicalBlockMatch(
+        fiCurrLuma, fiPrevLuma, fiLumaW, fiLumaH,
+        { block: 8, coarseRange: 3, refineRange: 1 },
+      );
+      const pair = typeof fiBidirectionalConsistency === "function"
+        ? fiBidirectionalConsistency(fiLastMatch, fiLastBackwardMatch)
+        : null;
+      if (pair) {
+        fiLastMatch.confidences = pair.forward;
+        fiLastBackwardMatch.confidences = pair.backward;
+        confidence = pair.confidence;
+      } else {
+        confidence = Math.min(fiLastMatch.confidence, fiLastBackwardMatch.confidence);
       }
-      fiUploadMvTexture(fiLastMatch);
+      fiForwardMvTexture = fiUploadMvTexture(fiLastMatch, fiForwardMvTexture);
+      fiBackwardMvTexture = fiUploadMvTexture(fiLastBackwardMatch, fiBackwardMvTexture);
     }
   } else if (fiSceneCutHold > 0) {
     sceneCut = true;
@@ -1136,24 +1289,19 @@ function fiRenderMidToOut(phase) {
   gl.viewport(0, 0, w, h);
   gl.bindVertexArray(vao);
 
-  if (method === "duplicate") {
-    gl.useProgram(fiBlendProgram);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, fiPrevTexture);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, fiPrevTexture);
-    gl.uniform1f(fiBlendPhaseLoc, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-  } else if (method === "block" && fiLastMatch && fiMvTexture) {
+  if (method === "block" && fiLastMatch && fiLastBackwardMatch &&
+      fiForwardMvTexture && fiBackwardMvTexture) {
     gl.useProgram(fiWarpProgram);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, fiPrevTexture);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, fiCurrTexture);
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, fiMvTexture);
-    // u_texel multiplies mv (already in source pixels) → uv offset = mv * texel
-    gl.uniform2f(fiWarpTexelLoc, 1 / w, 1 / h);
+    gl.bindTexture(gl.TEXTURE_2D, fiForwardMvTexture);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, fiBackwardMvTexture);
+    // Motion stays in the small luma grid, avoiding 8-bit clipping after upscaling.
+    gl.uniform2f(fiWarpTexelLoc, 1 / fiLumaW, 1 / fiLumaH);
     gl.uniform2f(fiWarpGridLoc, fiLastMatch.gridW, fiLastMatch.gridH);
     gl.uniform1f(fiWarpPhaseLoc, phase);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1172,12 +1320,19 @@ function fiRenderMidToOut(phase) {
 }
 
 function fiAfterVideoUpload(video) {
-  if (!settings.fiInfra || !gl) return;
-  if (!fiPrevTexture) fiPrevTexture = fiMakeTexture();
-  if (!fiCurrTexture) fiCurrTexture = fiMakeTexture();
+  if (!settings.fiInfra || !gl ||
+      (scrolling && settings.interaction !== "quality")) return false;
+  fiUpdateFpsEligibility();
+  if (settings.fiFpsGate && !fiFpsEligibleSticky) {
+    if (fiHasCurr || fiLatencyActive) resetFiPairState();
+    fiMethod = "skip";
+    fiSkipReason = "Fonte fora da faixa 24/30 — FI não processou este frame.";
+    return false;
+  }
   const w = video.videoWidth;
   const h = video.videoHeight;
-  if (!w || !h) return;
+  if (!w || !h) return false;
+  fiEnsureFrameTextures(w, h);
 
   if (fiHasCurr) {
     // previous curr becomes prev
@@ -1189,35 +1344,57 @@ function fiAfterVideoUpload(video) {
   // copy current video texture into fiCurrTexture
   fiCopyTexture(texture, fiCurrTexture, w, h);
   fiHasCurr = true;
+  fiPairSerial++;
   fiUpdateLumaSample(video);
   fiComputeDecision();
+  return true;
 }
 
-function fiScheduleMidFrame() {
+function fiScheduleMidFrame(pairSerial, metadata) {
   cancelFiMid();
-  if (!canRender() || !fiShouldPresentMid()) return;
+  if (!canRender()) return;
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
-  // Place mid near half-interval, but never so late that it collides with the next rVFC.
-  const delay = Math.max(3, Math.min(18, 400 / fps));
-  const scheduledMethod = fiMethod;
-  fiMidRaf = requestAnimationFrame(() => {
+  const rate = currentVideo && Number(currentVideo.playbackRate) > 0
+    ? Number(currentVideo.playbackRate)
+    : 1;
+  const duration = Math.max(8, Math.min(250,
+    lastVideoFrameDurationMs > 0 ? lastVideoFrameDurationMs : 1000 / (fps * rate)));
+  const expected = Number(metadata && metadata.expectedDisplayTime);
+  const anchorTime = Number.isFinite(expected) ? expected : performance.now();
+
+  const present = (now) => {
     fiMidRaf = null;
     if (!canRender() || !settings.fiInfra) return;
-    // Second leg: timeout only if we still have time before next typical anchor.
-    fiMidTimer = setTimeout(() => {
-      fiMidTimer = null;
-      if (!canRender() || !settings.fiInfra) return;
-      if (scheduledMethod !== "block" || fiMethod === "skip") return;
-      // If a new real frame already arrived, pair state advanced — abort stale mid.
-      if (!fiHasPrev || !fiHasCurr) return;
-      fiDrawingMid = true;
-      try {
-        draw({ fiMid: true, fiLight: true });
-      } finally {
-        fiDrawingMid = false;
-      }
-    }, Math.max(0, delay - 4));
-  });
+    if (pairSerial !== fiPairSerial || !fiHasCurr) return;
+    const phase = typeof fiPresentationPhase === "function"
+      ? fiPresentationPhase(now, anchorTime, duration)
+      : Math.max(0, Math.min(1, (now - anchorTime) / duration));
+    // ponytail: cap FI at 2x; revisit display-rate fan-out only with a GPU-native matcher.
+    if (phase < 0.35) {
+      fiMidRaf = requestAnimationFrame(present);
+      return;
+    }
+    if (phase >= 1) return;
+    const estimatedCost = Math.max(
+      settings.mode === "ravu" ? 12 : 2,
+      fiLastRealCpuMs || 0,
+      metricReport.gpuMs || 0,
+    );
+    const fits = typeof fiMidFitsDeadline === "function"
+      ? fiMidFitsDeadline(phase, duration, estimatedCost)
+      : duration * (1 - phase) >= estimatedCost + 2;
+    if (!fits) {
+      fiSkipReason =
+        `Meio tardio cancelado (${(duration * (1 - phase)).toFixed(1)} ms restantes).`;
+      return;
+    }
+    try {
+      draw({ fiMid: true, fiPhase: phase });
+    } catch (err) {
+      log("FI mid draw failed:", err);
+    }
+  };
+  fiMidRaf = requestAnimationFrame(present);
 }
 
 // --------------------------------------------------------------------------
@@ -1255,6 +1432,8 @@ function createOverlay() {
     log("WebGL2 indisponível neste Firefox/hardware");
     return false;
   }
+  timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+  timerExtChecked = true;
   program = linkProgram(VERT, FRAG);
   easuProgram = linkProgram(VERT, EASU_FRAG);
   rcasProgram = linkProgram(VERT_PLAIN, FRAG);
@@ -1303,9 +1482,7 @@ function createOverlay() {
   framebuffer = gl.createFramebuffer();
 
   applyCanvasOutline(false);
-  fiEnsurePrograms();
-  if (!fiPrevTexture) fiPrevTexture = fiMakeTexture();
-  if (!fiCurrTexture) fiCurrTexture = fiMakeTexture();
+  warmFiPrograms();
   return true;
 }
 
@@ -1356,7 +1533,7 @@ function extractRavuShader(source, name) {
 function loadRavuShaders() {
   if (ravuStepProgram && ravuComposeProgram) return Promise.resolve(true);
   if (ravuShadersPromise) return ravuShadersPromise;
-  ravuShadersPromise = fetch(browser.runtime.getURL("third_party/ravu-lite/ravu-lite-webgl2.js"))
+  ravuShadersPromise = fetch(ext.runtime.getURL("third_party/ravu-lite/ravu-lite-webgl2.js"))
     .then((response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.text();
@@ -1396,7 +1573,7 @@ function loadRavuShaders() {
 function loadRavuLut() {
   if (ravuLutReady) return Promise.resolve(true);
   if (ravuLutPromise) return ravuLutPromise;
-  ravuLutPromise = fetch(browser.runtime.getURL("third_party/ravu-lite/ravu-lite-lut3.bin"))
+  ravuLutPromise = fetch(ext.runtime.getURL("third_party/ravu-lite/ravu-lite-lut3.bin"))
     .then((response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.arrayBuffer();
@@ -1432,6 +1609,12 @@ function loadRavuLut() {
 function loadRavuAssets() {
   return Promise.all([loadRavuShaders(), loadRavuLut()])
     .then(([shaders, lut]) => shaders && lut);
+}
+
+function invalidateRavuRetry() {
+  ravuRetryGeneration++;
+  ravuPendingCaptureVideo = null;
+  ravuRetryPromise = null;
 }
 
 function ensureIntermediate() {
@@ -1508,7 +1691,9 @@ function attachCanvasTo(video) {
 function deactivateRenderer() {
   cancelScheduledFrame();
   cancelFiMid();
+  invalidateRavuRetry();
   resetFiPairState();
+  resetVideoFrameHistory();
   detachActivePageListeners();
   restoreVideoPaint();
   if (scrollResumeTimer !== null) clearTimeout(scrollResumeTimer);
@@ -1530,14 +1715,14 @@ function deactivateRenderer() {
   resetMetricWindow(performance.now());
 }
 
-function activateRenderer() {
+function activateRenderer(captureFrame = false) {
   if (!currentVideo || settings.mode === "off") return false;
   if (!canvas && !createOverlay()) return false;
   attachCanvasTo(currentVideo);
   attachActivePageListeners();
   layoutDirty = true;
   updateCanvasVisibility();
-  draw();
+  draw({ newVideoFrame: captureFrame });
   schedule();
   return true;
 }
@@ -1591,59 +1776,88 @@ function syncLayout() {
 function draw(options = {}) {
   if (stopped || !canRender() ||
       !currentVideo || !gl || !canvas.parentNode) return;
-  const isFiMid = options.fiMid === true;
+  const drawKind = frameDrawKind(options);
+  const isFiMid = drawKind === "mid";
   // Never let a pending mid fire across a new real frame (stale/janky).
-  if (!isFiMid) cancelFiMid();
-  if (settings.mode === "ravu" &&
-      (!ravuLutReady || !ravuStepProgram || !ravuComposeProgram)) {
-    const ravuError = ravuShaderError || ravuLutError;
-    activePipeline = ravuError ? "RAVU-lite indisponível" : "RAVU-lite carregando";
-    updateCanvasDataset(activePipeline, ravuError);
-    if (ravuError) {
-      // Assets ausentes/quebrados: não deixar canvas preto cobrindo o vídeo.
-      status = "error";
-      lastError = ravuError;
-      if (canvas) {
-        canvas.style.visibility = "hidden";
-        lastCanvasVisibility = "hidden";
-      }
-      removeCompareLabels();
-      cancelScheduledFrame();
-      cancelFiMid();
-    } else {
-      loadRavuAssets().then((ready) => {
-        if (ready && settings.mode === "ravu" && currentVideo) {
-          updateCanvasVisibility();
-          draw(options);
-        } else if (!ready && settings.mode === "ravu") {
-          draw(options);
-        }
-      });
-    }
-    return;
-  }
+  if (drawKind === "capture") cancelFiMid();
   cpuFrame = (cpuFrame + 1) % 15;
-  const measureCpu = cpuFrame === 0 || !metricWindow;
+  const measureCpu = drawKind === "capture" || cpuFrame === 0 || !metricWindow;
   const cpuStart = measureCpu ? performance.now() : 0;
   syncLayout();
   if (canvas.width === 0 || canvas.height === 0) return;
   if (currentVideo.videoWidth === 0 || currentVideo.videoHeight === 0) return;
+  if (drawKind === "redraw" && (!textureWidth || !textureHeight)) return;
+  if (drawKind === "redraw" &&
+      (textureWidth !== currentVideo.videoWidth || textureHeight !== currentVideo.videoHeight)) return;
+  if (settings.mode === "ravu" &&
+      shouldUseRavu(
+        currentVideo.videoWidth, currentVideo.videoHeight, canvas.width, canvas.height,
+        settings.quality,
+      ) && (!ravuLutReady || !ravuStepProgram || !ravuComposeProgram)) {
+    const ravuError = ravuShaderError || ravuLutError;
+    activePipeline = ravuError ? "RAVU-lite indisponível" : "RAVU-lite carregando";
+    updateCanvasDataset(activePipeline, ravuError);
+    if (ravuError) {
+      invalidateRavuRetry();
+      // Assets ausentes/quebrados: não deixar canvas preto cobrindo o vídeo.
+      status = "error";
+      lastError = ravuError;
+      updateCanvasVisibility();
+      removeCompareLabels();
+      cancelScheduledFrame();
+      cancelFiMid();
+    } else {
+      if (drawKind === "capture") ravuPendingCaptureVideo = currentVideo;
+      if (!ravuRetryPromise) {
+        const generation = ravuRetryGeneration;
+        ravuRetryPromise = loadRavuAssets()
+          .then((ready) => {
+            if (generation !== ravuRetryGeneration) return;
+            const captureVideo = ravuPendingCaptureVideo;
+            ravuPendingCaptureVideo = null;
+            if (ready && settings.mode === "ravu" && currentVideo) {
+              updateCanvasVisibility();
+              draw({ newVideoFrame: captureVideo === currentVideo });
+            } else if (!ready && settings.mode === "ravu") {
+              draw();
+            }
+          })
+          .catch((error) => {
+            if (generation !== ravuRetryGeneration) return;
+            ravuShaderError = `RAVU-lite: ${error.message || error}`;
+            lastError = ravuShaderError;
+            log("falha inesperada no coordenador RAVU-lite:", error);
+          })
+          .finally(() => {
+            if (generation !== ravuRetryGeneration) return;
+            ravuPendingCaptureVideo = null;
+            ravuRetryPromise = null;
+          });
+      }
+    }
+    return;
+  }
 
   gl.bindVertexArray(vao);
   pollGpuTimers();
   let gpuQuery = null;
   gpuFrame = (gpuFrame + 1) % 15;
+  const gpuTimingNow = measureCpu ? cpuStart : performance.now();
   if (timerExt && gpuFrame === 0 && gpuQueries.length < 2 &&
-      (measureCpu ? cpuStart : performance.now()) < gpuTimingUntil) {
+      (settings.fiInfra || settings.quality === "auto" || gpuTimingNow < gpuTimingUntil)) {
     gpuQuery = gl.createQuery();
     gl.beginQuery(timerExt.TIME_ELAPSED_EXT, gpuQuery);
   }
 
   let sourceTex = texture;
   let fiTag = "";
+  let presentingFiMid = isFiMid;
+  let presentation = "current";
+  let srcW = drawKind === "capture" ? currentVideo.videoWidth : textureWidth;
+  let srcH = drawKind === "capture" ? currentVideo.videoHeight : textureHeight;
 
   if (isFiMid) {
-    if (!fiRenderMidToOut(0.5)) {
+    if (!fiRenderMidToOut(Number.isFinite(options.fiPhase) ? options.fiPhase : 0.5)) {
       if (gpuQuery) {
         gl.endQuery(timerExt.TIME_ELAPSED_EXT);
         gl.deleteQuery(gpuQuery);
@@ -1652,43 +1866,8 @@ function draw(options = {}) {
     }
     sourceTex = fiOutTexture;
     fiTag = ` · FI ${fiMethod}`;
-    // Lightweight mid: show FI result with a cheap blit (no second RAVU/EASU).
-    // Full spatial path on mid was ~doubling 30ms work → meios never landed.
-    if (options.fiLight !== false) {
-      const w = fiOutW || textureWidth;
-      const h = fiOutH || textureHeight;
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, canvas.width, canvas.height);
-      gl.useProgram(program);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, fiOutTexture);
-      setDirectUniforms(
-        1 / Math.max(1, w), 1 / Math.max(1, h),
-        0, settings.compare ? 1 : 0,
-      );
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
-      const labels = {
-        blend: "mistura",
-        block: "movimento",
-        duplicate: "cópia",
-      };
-      activePipeline = `FI meio (${labels[fiMethod] || fiMethod})`;
-      if (gpuQuery) {
-        gl.endQuery(timerExt.TIME_ELAPSED_EXT);
-        gpuQueries.push(gpuQuery);
-      }
-      updateCanvasDataset(activePipeline, "");
-      const midCpu = measureCpu ? performance.now() - cpuStart : null;
-      recordDraw(midCpu);
-      fiMidDrawsWindow++;
-      if (status !== "ok") {
-        status = "ok";
-        lastError = "";
-      }
-      updateCanvasVisibility();
-      return;
-    }
-  } else {
+    presentation = "mid";
+  } else if (drawKind === "capture") {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texture);
     try {
@@ -1725,17 +1904,41 @@ function draw(options = {}) {
         log("FI pair update failed:", err);
         fiMethod = "skip";
       }
+      const useLatency = fiLatencyEnabled(
+        settings.fiInfra, settings.fiFpsGate, fiFpsEligibleSticky,
+        fiHasPrev && fiHasCurr,
+      );
+      if (useLatency) {
+        fiLatencyActive = true;
+        sourceTex = fiPrevTexture;
+        srcW = textureWidth;
+        srcH = textureHeight;
+        fiTag = " · FI âncora";
+        presentation = "anchor";
+        if (fiShouldPresentMid()) {
+          fiScheduleMidFrame(fiPairSerial, options.videoMetadata);
+        }
+      } else if (fiLatencyActive) {
+        resetFiPairState();
+      }
     } else {
       cancelFiMid();
       fiMethod = "skip";
     }
-    sourceTex = texture;
+  } else if (fiLastPresentation === "mid" && fiOutTexture && fiHasPrev && fiHasCurr) {
+    sourceTex = fiOutTexture;
+    fiTag = ` · FI ${fiMethod}`;
+    presentation = "mid";
+  } else if (fiLatencyActive && fiHasPrev && fiHasCurr) {
+    sourceTex = fiPrevTexture;
+    fiTag = " · FI âncora";
+    presentation = "anchor";
   }
 
-  const srcW = isFiMid ? fiOutW : currentVideo.videoWidth;
-  const srcH = isFiMid ? fiOutH : currentVideo.videoHeight;
+  if (!srcW || !srcH) return;
 
-  if (settings.mode === "ravu") {
+  if (settings.mode === "ravu" &&
+      shouldUseRavu(srcW, srcH, canvas.width, canvas.height, settings.quality)) {
     const rcasStrength = adjustedRcasStrength(
       settings.strength / 100,
       Math.max(canvas.width / srcW, canvas.height / srcH),
@@ -1750,7 +1953,7 @@ function draw(options = {}) {
       return;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, ravuFramebuffer);
-    gl.viewport(0, 0, currentVideo.videoWidth, currentVideo.videoHeight);
+    gl.viewport(0, 0, srcW, srcH);
     gl.useProgram(ravuStepProgram);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, sourceTex);
@@ -1766,7 +1969,7 @@ function draw(options = {}) {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, ravuPackedTexture);
     setRavuComposeUniforms(
-      currentVideo.videoWidth, currentVideo.videoHeight,
+      srcW, srcH,
       1 / canvas.width, 1 / canvas.height,
       settings.compare ? 1 : 0,
     );
@@ -1787,6 +1990,18 @@ function draw(options = {}) {
     activePipeline = useRcas
       ? `RAVU-lite AR → RCAS${ravuFloatTarget ? "" : " (8-bit)"}`
       : `RAVU-lite AR${ravuFloatTarget ? "" : " (8-bit)"}`;
+  } else if (settings.mode === "native") {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sourceTex);
+    setDirectUniforms(
+      1 / srcW, 1 / srcH,
+      0, settings.compare ? 1 : 0,
+    );
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    activePipeline = "Nativo";
   } else {
     const useEasu = canvas.width > srcW || canvas.height > srcH;
     const rcasStrength = adjustedRcasStrength(
@@ -1830,7 +2045,9 @@ function draw(options = {}) {
         rcasStrength, settings.compare ? 1 : 0,
       );
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      activePipeline = "RCAS";
+      activePipeline = settings.mode === "ravu"
+        ? "RCAS (RAVU ignorado: perfil econômico + saída ≤ fonte)"
+        : "RCAS";
     }
   }
   activePipeline += fiTag;
@@ -1839,12 +2056,10 @@ function draw(options = {}) {
     gpuQueries.push(gpuQuery);
   }
   updateCanvasDataset(activePipeline, "");
+  fiLastPresentation = presentation;
   const cpuMs = measureCpu ? performance.now() - cpuStart : null;
-  recordDraw(cpuMs);
-  if (isFiMid) {
-    fiMidDrawsWindow++;
-  } else {
-    fiRealDrawsWindow++;
+  if (drawKind !== "redraw") recordDraw(cpuMs, presentingFiMid);
+  if (drawKind === "capture") {
     if (cpuMs != null) fiLastRealCpuMs = cpuMs;
     else if (metricReport.cpuMs > 0) fiLastRealCpuMs = metricReport.cpuMs;
   }
@@ -1856,7 +2071,6 @@ function draw(options = {}) {
         currentVideo.clientWidth + "x" + currentVideo.clientHeight);
   }
   updateCanvasVisibility();
-  if (!isFiMid && settings.fiInfra) fiScheduleMidFrame();
 }
 
 // --------------------------------------------------------------------------
@@ -1868,6 +2082,10 @@ function onFrame(now, metadata) {
   scheduledKind = null;
   if (stopped) return;
   const freshFrame = recordVideoFrame(now, metadata);
+  if (fiResumeGap) {
+    resetFiPairState();
+    fiSkipReason = "Lacuna temporal detectada — reiniciando o par FI.";
+  }
   publishMetrics(now);
   if (!currentVideo || !document.body.contains(currentVideo)) {
     if (videoResizeObserver) videoResizeObserver.disconnect();
@@ -1882,11 +2100,8 @@ function onFrame(now, metadata) {
     schedule();
     return;
   }
-  if (freshFrame) {
-    draw();
-    if (schedulerMode === "display" && canRender()) lastDisplayDrawTime = now;
-  }
   schedule();
+  if (freshFrame) draw({ newVideoFrame: true, videoMetadata: metadata });
 }
 
 function schedule() {
@@ -1898,25 +2113,12 @@ function schedule() {
     }, INTERACTION_PREVIEW_MS);
     return;
   }
-  if (schedulerMode === "video" &&
-      typeof currentVideo.requestVideoFrameCallback === "function") {
+  if (typeof currentVideo.requestVideoFrameCallback === "function") {
     scheduledKind = "video";
     rafId = currentVideo.requestVideoFrameCallback(onFrame);
   } else {
-    const delay = displayPollDelay(
-      lastDisplayDrawTime, performance.now(), metricReport.videoFps || 60,
-    );
-    if (delay > 4) {
-      scheduledKind = "timeout";
-      rafId = setTimeout(() => {
-        rafId = null;
-        scheduledKind = null;
-        schedule();
-      }, delay);
-    } else {
-      scheduledKind = "animation";
-      rafId = requestAnimationFrame(onFrame);
-    }
+    scheduledKind = "animation";
+    rafId = requestAnimationFrame(onFrame);
   }
 }
 
@@ -1961,7 +2163,11 @@ function scheduleRescan() {
 
 function handleVisibilityChange() {
   updateCanvasVisibility();
-  if (document.hidden) cancelScheduledFrame();
+  if (document.hidden) {
+    cancelScheduledFrame();
+    resetFiPairState();
+    resetVideoFrameHistory();
+  }
   else {
     scheduleRescan();
     schedule();
@@ -2014,8 +2220,11 @@ function handleVideoDiscovery() {
   scheduleRescan();
 }
 
-function handleStillFrame() {
-  if (currentVideo) draw();
+function handleStillFrame(event) {
+  if (!currentVideo || !event || event.target !== currentVideo) return;
+  resetFiPairState();
+  resetVideoFrameHistory();
+  if (currentVideo.readyState >= 2) draw({ newVideoFrame: true });
 }
 
 function attachDiscoveryListeners() {
@@ -2025,7 +2234,9 @@ function attachDiscoveryListeners() {
   document.addEventListener("play", handleVideoDiscovery, true);
   document.addEventListener("loadedmetadata", handleVideoDiscovery, true);
   document.addEventListener("emptied", handleVideoDiscovery, true);
-  // Redraw explícito em seek/load quando pausado (rVFC não dispara parado).
+  // rVFC não dispara parado: capture o frame real ao pausar/terminar/alterar o atual.
+  document.addEventListener("pause", handleStillFrame, true);
+  document.addEventListener("ended", handleStillFrame, true);
   document.addEventListener("seeked", handleStillFrame, true);
   document.addEventListener("loadeddata", handleStillFrame, true);
 }
@@ -2036,6 +2247,8 @@ function detachDiscoveryListeners() {
   document.removeEventListener("play", handleVideoDiscovery, true);
   document.removeEventListener("loadedmetadata", handleVideoDiscovery, true);
   document.removeEventListener("emptied", handleVideoDiscovery, true);
+  document.removeEventListener("pause", handleStillFrame, true);
+  document.removeEventListener("ended", handleStillFrame, true);
   document.removeEventListener("seeked", handleStillFrame, true);
   document.removeEventListener("loadeddata", handleStillFrame, true);
 }
@@ -2055,14 +2268,12 @@ function handleVideoIntersection(entries) {
   if (visible === videoInViewport) return;
   videoInViewport = visible;
   resetMetricWindow(performance.now());
-  lastPresentedFrames = null;
-  lastMediaTime = null;
-  lastPlaybackDropped = null;
-  lastPlaybackTotal = null;
+  resetFiPairState();
+  resetVideoFrameHistory();
   updateCanvasVisibility();
   if (visible) {
     schedule();
-    draw();
+    draw({ newVideoFrame: true });
   } else {
     cancelScheduledFrame();
   }
@@ -2100,17 +2311,20 @@ function rescan() {
   }
   if (next && next !== currentVideo) {
     cancelScheduledFrame();
+    ravuPendingCaptureVideo = null;
     restoreVideoPaint();
-    lastPresentedFrames = null;
-    lastMediaTime = null;
-    lastPlaybackDropped = null;
-    lastPlaybackTotal = null;
-    lastDisplayDrawTime = 0;
+    resetVideoFrameHistory();
     if (settings.quality === "auto") {
       renderScale = 1;
       stableWindows = 0;
     }
     currentVideo = next;
+    textureWidth = 0;
+    textureHeight = 0;
+    resetFiPairState();
+    fiFpsEligible = false;
+    fiFpsEligibleSticky = false;
+    metricReport.videoFps = 0;
     videoInViewport = true;
     if (activePageListeners && videoResizeObserver) {
       videoResizeObserver.disconnect();
@@ -2123,7 +2337,7 @@ function rescan() {
     layoutDirty = true;
     log("vídeo selecionado:", next.clientWidth + "x", next.clientHeight,
         next.videoWidth ? "(src " + next.videoWidth + "x" + next.videoHeight + ")" : "");
-    if (settings.mode !== "off" && !activateRenderer()) return;
+    if (settings.mode !== "off" && !activateRenderer(true)) return;
   }
   if (currentVideo && layoutDirty) syncLayout();
   if (currentVideo && currentVideo.paused && currentVideo.readyState >= 2) draw();
@@ -2156,11 +2370,14 @@ function applySettings(value) {
     settings.fiBlockMatch !== previous.fiBlockMatch ||
     settings.fiFallback !== previous.fiFallback;
 
+  if (previous.mode === "ravu" && settings.mode !== "ravu") invalidateRavuRetry();
+
   if (settings.mode === "off") {
     detachDiscoveryListeners();
     deactivateRenderer();
     return;
   }
+  if (previous.mode === "off") overlayVisible = true;
   attachDiscoveryListeners();
   if (settings.quality !== "auto" && qualityChanged) {
     const scales = { high: 1, balanced: 0.75, performance: 0.5 };
@@ -2169,10 +2386,8 @@ function applySettings(value) {
     stableWindows = 0;
     setRenderScale(1, "— modo automático reiniciado");
   }
-  if (!settings.fiInfra || settings.fiInfra !== previous.fiInfra) {
-    cancelFiMid();
-    if (!settings.fiInfra) resetFiPairState();
-  }
+  if (fiChanged) resetFiPairState();
+  if (settings.fiInfra) warmFiPrograms();
   if (canvas) {
     if (outlineChanged && flashTimer === null) applyCanvasOutline(false);
     if (compareChanged || modeChanged) {
@@ -2207,7 +2422,7 @@ function applySettings(value) {
 }
 
 function loadSettings() {
-  browser.storage.onChanged.addListener((changes, area) => {
+  ext.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     const next = { ...settings };
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
@@ -2215,7 +2430,7 @@ function loadSettings() {
     }
     applySettings(next);
   });
-  return browser.storage.local.get(DEFAULT_SETTINGS)
+  return ext.storage.local.get(DEFAULT_SETTINGS)
     .then(applySettings)
     .catch((error) => {
       log("não foi possível carregar preferências:", error);
@@ -2241,7 +2456,9 @@ function snapshot() {
     canvasWidth: canvas ? canvas.width : 0,
     canvasHeight: canvas ? canvas.height : 0,
     pipeline: activePipeline,
-    scheduler: schedulerMode === "video" ? "frame do vídeo" : "refresh da tela",
+    scheduler: currentVideo && typeof currentVideo.requestVideoFrameCallback === "function"
+      ? "frame do vídeo"
+      : "refresh da tela",
     settings: { ...settings },
     metrics: { ...metricReport, gpuSupported: Boolean(timerExt) },
     fi: {
@@ -2264,11 +2481,13 @@ function toggleOverlay() {
   if (settings.mode === "off") return snapshot();
   overlayVisible = !overlayVisible;
   resetMetricWindow(performance.now());
+  resetFiPairState();
+  resetVideoFrameHistory();
   updateCanvasVisibility();
   if (overlayVisible) {
     attachActivePageListeners();
     schedule();
-    if (currentVideo) draw();
+    if (currentVideo) draw({ newVideoFrame: true });
   } else {
     if (scrollResumeTimer !== null) clearTimeout(scrollResumeTimer);
     scrollResumeTimer = null;
@@ -2295,7 +2514,8 @@ function suspendOverlayForInteraction() {
     scrolling = true;
     layoutDirty = true;
     cancelScheduledFrame();
-    cancelFiMid();
+    resetFiPairState();
+    resetVideoFrameHistory();
     updateCanvasVisibility();
     schedule();
   }
@@ -2303,6 +2523,8 @@ function suspendOverlayForInteraction() {
     scrollResumeTimer = null;
     scrolling = false;
     layoutDirty = true;
+    resetFiPairState();
+    resetVideoFrameHistory();
     resetMetricWindow(performance.now());
     updateCanvasVisibility();
     schedule();
@@ -2337,12 +2559,12 @@ function runSpike() {
   }
   window.__fvEnhancerLoaded = true;
 
-  browser.runtime.onMessage.addListener((message) => {
-    if (message && message.type === "fv-status") return Promise.resolve(snapshot());
-    if (message && message.type === "fv-toggle") return Promise.resolve(toggleOverlay());
+  ext.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message && message.type === "fv-status") sendResponse(snapshot());
+    if (message && message.type === "fv-toggle") sendResponse(toggleOverlay());
     if (message && message.type === "fv-settings") {
       applySettings({ ...settings, ...message.settings });
-      return Promise.resolve(snapshot());
+      sendResponse(snapshot());
     }
   });
 
@@ -2388,13 +2610,14 @@ function selfCheck() {
     mode: "invalid", strength: 150.4, outline: 1, compare: 1, quality: "invalid",
     interaction: "invalid",
   });
-  if (normalized.mode !== "ravu" || normalized.strength !== 100 ||
+  if (normalized.mode !== "off" || normalized.strength !== 100 ||
       normalized.outline || normalized.compare || normalized.quality !== "high" ||
       normalized.interaction !== "smooth") {
     throw new Error("selfCheck: normalização de preferências falhou");
   }
   if (normalizeSettings({ mode: "passthrough" }).mode !== "off" ||
       normalizeSettings({ mode: "ravu" }).mode !== "ravu" ||
+      normalizeSettings({ mode: "native" }).mode !== "native" ||
       normalizeSettings({ interaction: "balanced" }).interaction !== "balanced") {
     throw new Error("selfCheck: migração de passthrough ou modo RAVU falhou");
   }
@@ -2410,23 +2633,157 @@ function selfCheck() {
   if (settings.fiInfra !== false || settings.fiSceneCut !== true) {
     throw new Error("selfCheck: defaults FI incorretos");
   }
+  const fiSample = fiLumaSampleSize(1920, 1080, true);
+  const fiDetailedSample = fiLumaSampleSize(1920, 1080, false);
+  if (fiSample.width > 160 || fiSample.height > 96) {
+    throw new Error("selfCheck: amostra FI grande demais");
+  }
+  if (fiDetailedSample.width <= fiSample.width || fiDetailedSample.height <= fiSample.height) {
+    throw new Error("selfCheck: opção FI leve deve ser menor que detalhada");
+  }
   if (typeof fiSelfCheck === "function") fiSelfCheck();
   // Shipped warp shader must use ME-correct sampling (not inverted).
-  if (!FI_WARP_FRAG.includes("v_uv - mv * t * u_texel") ||
-      !FI_WARP_FRAG.includes("v_uv + mv * (1.0 - t) * u_texel") ||
-      /fromPrev = v_uv \+ mv \* t/.test(FI_WARP_FRAG)) {
+  if (!FI_WARP_FRAG.includes("v_uv - forwardMv * t * u_texel") ||
+      !FI_WARP_FRAG.includes("v_uv - backwardMv * (1.0 - t) * u_texel") ||
+      /fromPrev = v_uv \+ forwardMv \* t/.test(FI_WARP_FRAG)) {
     throw new Error("selfCheck: FI_WARP_FRAG motion sampling direction wrong");
+  }
+  if (EASU_FRAG.includes("settings.mode") || EASU_FRAG.includes("gl.bindFramebuffer")) {
+    throw new Error("selfCheck: código JS vazou para shader EASU");
+  }
+  if (FI_WARP_FRAG.includes("floor(v_uv * u_mv_grid)") ||
+      !FI_WARP_FRAG.includes("packedForward.a") ||
+      !FI_WARP_FRAG.includes("packedBackward.a") ||
+      FI_WARP_FRAG.includes("/ 4.0) * forwardConfidence") ||
+      !String(fiUploadMvTexture).includes("gl.LINEAR")) {
+    throw new Error("selfCheck: FI artifact guard missing");
+  }
+  if (!String(fiRenderMidToOut).includes("1 / fiLumaW") ||
+      String(fiComputeDecision).includes("videoWidth / fiLumaW") ||
+      !String(fiComputeDecision).includes("fiBidirectionalConsistency") ||
+      !String(fiRenderMidToOut).includes("fiBackwardMvTexture")) {
+    throw new Error("selfCheck: FI motion must stay in luma-grid coordinates");
   }
   // FBO separation: copy binds fiCopyFb; mid path re-binds out target every time.
   const copySrc = String(fiCopyTexture);
   if (!copySrc.includes("fiCopyFb") ||
       !/bindFramebuffer\(\s*gl\.FRAMEBUFFER\s*,\s*fiCopyFb\s*\)/.test(copySrc) ||
-      /bindFramebuffer\(\s*gl\.FRAMEBUFFER\s*,\s*fiOutFb\s*\)/.test(copySrc)) {
+      /bindFramebuffer\(\s*gl\.FRAMEBUFFER\s*,\s*fiOutFb\s*\)/.test(copySrc) ||
+      copySrc.includes("texImage2D")) {
     throw new Error("selfCheck: fiCopyTexture must bind fiCopyFb, not fiOutFb");
+  }
+  if (!String(fiEnsureFrameTextures).includes("fiTextureW === w") ||
+      !String(fiEnsureFrameTextures).includes("texImage2D")) {
+    throw new Error("selfCheck: FI frame textures must allocate only on resize");
   }
   if (!String(fiEnsureOut).includes("fiBindOutTarget") ||
       !String(fiRenderMidToOut).includes("fiBindOutTarget")) {
     throw new Error("selfCheck: mid-out path must re-bind fiOutTexture via fiBindOutTarget");
+  }
+  if (String(fiShouldPresentMid).includes('settings.mode === "ravu"')) {
+    throw new Error("selfCheck: FI não deve bloquear RAVU por modo");
+  }
+  if (!String(fiScheduleMidFrame).includes("fiMid: true") ||
+      !String(fiScheduleMidFrame).includes("requestAnimationFrame") ||
+      !String(fiScheduleMidFrame).includes("fiPresentationPhase") ||
+      !String(fiScheduleMidFrame).includes("phase < 0.35") ||
+      String(fiScheduleMidFrame).includes("if (pairSerial === fiPairSerial) fiMidRaf") ||
+      !String(draw).includes("options.fiPhase") ||
+      !String(draw).includes("FI âncora") ||
+      String(draw).includes("fiLight")) {
+    throw new Error("selfCheck: FI deve usar latência de 1 frame e pipeline completo");
+  }
+  if (Math.abs(fiPresentationPhase(116, 100, 40) - 0.4) > 1e-6 ||
+      fiPresentationPhase(99, 100, 40) !== 0 ||
+      fiPresentationPhase(140, 100, 40) !== 1) {
+    throw new Error("selfCheck: FI display phase is not tied to video time");
+  }
+  if (Math.abs(fiFrameDurationMs(50, 1 / 24, 1, 1) - 1000 / 24) > 1e-6 ||
+      Math.abs(fiFrameDurationMs(33.4, NaN, 1, 1) - 33.4) > 1e-6 ||
+      Math.abs(fiFrameDurationMs(NaN, 0.04, 1, 2) - 20) > 1e-6 ||
+      fiIsTimingGap(249, 1000 / 30) || !fiIsTimingGap(251, 1000 / 30)) {
+    throw new Error("selfCheck: FI wall-clock duration/gap calculation failed");
+  }
+  if (String(recordVideoFrame).includes("fiResumeGap = presentedDelta > 1")) {
+    throw new Error("selfCheck: callback perdido não deve reiniciar a linha FI");
+  }
+  if (!fiLatencyEnabled(true, true, true, true) ||
+      fiLatencyEnabled(true, true, false, true) ||
+      fiLatencyEnabled(true, false, false, false)) {
+    throw new Error("selfCheck: FI latency transition gate failed");
+  }
+  if (frameDrawKind({}) !== "redraw" ||
+      frameDrawKind({ newVideoFrame: true }) !== "capture" ||
+      frameDrawKind({ newVideoFrame: true, fiMid: true }) !== "mid") {
+    throw new Error("selfCheck: draw kind classification failed");
+  }
+  const drawSrc = String(draw);
+  const ravuAssetGate = drawSrc.indexOf('if (settings.mode === "ravu" &&');
+  const ravuAssetLoad = drawSrc.indexOf("loadRavuAssets()", ravuAssetGate);
+  if (ravuAssetGate < 0 || ravuAssetLoad < 0 ||
+      !drawSrc.slice(ravuAssetGate, ravuAssetLoad).includes("shouldUseRavu(")) {
+    throw new Error("selfCheck: downscale RAVU não deve carregar assets");
+  }
+  if (!String(createOverlay).includes("EXT_disjoint_timer_query_webgl2") ||
+      !drawSrc.includes('settings.fiInfra || settings.quality === "auto"')) {
+    throw new Error("selfCheck: FI/Auto deve manter amostragem GPU ativa");
+  }
+  if (drawSrc.indexOf("sourceTex = fiPrevTexture") < 0 ||
+      drawSrc.indexOf("sourceTex = fiPrevTexture") > drawSrc.indexOf("fiShouldPresentMid()")) {
+    throw new Error("selfCheck: FI latency must not depend on the mid-frame gate");
+  }
+  if (drawSrc.indexOf('else if (drawKind === "capture")') < 0 ||
+      drawSrc.indexOf('else if (drawKind === "capture")') >
+        drawSrc.indexOf("fiAfterVideoUpload(currentVideo)") ||
+      !String(onFrame).includes("newVideoFrame: true")) {
+    throw new Error("selfCheck: only fresh video callbacks may advance the FI pair");
+  }
+  const applySrc = String(applySettings);
+  if (!drawSrc.includes('if (drawKind === "capture") ravuPendingCaptureVideo = currentVideo') ||
+      !drawSrc.includes("if (!ravuRetryPromise)") ||
+      !drawSrc.includes("captureVideo === currentVideo") ||
+      !drawSrc.includes(".catch((error)") || !drawSrc.includes(".finally(()") ||
+      !drawSrc.includes("generation !== ravuRetryGeneration") ||
+      !String(deactivateRenderer).includes("invalidateRavuRetry()") ||
+      !applySrc.includes('previous.mode === "ravu" && settings.mode !== "ravu"') ||
+      !String(rescan).includes("ravuPendingCaptureVideo = null")) {
+    throw new Error("selfCheck: RAVU loading must coalesce capture intent per video");
+  }
+  const reenableOverlay = 'if (previous.mode === "off") overlayVisible = true;';
+  if (applySrc.indexOf(reenableOverlay) < 0 ||
+      applySrc.indexOf(reenableOverlay) > applySrc.indexOf("attachDiscoveryListeners()")) {
+    throw new Error("selfCheck: reativar um modo deve restaurar o overlay antes do renderer");
+  }
+  const ravuErrorStart = drawSrc.indexOf("if (ravuError)");
+  const ravuErrorEnd = drawSrc.indexOf("} else {", ravuErrorStart);
+  if (ravuErrorStart < 0 || ravuErrorEnd < ravuErrorStart ||
+      !drawSrc.slice(ravuErrorStart, ravuErrorEnd).includes("updateCanvasVisibility()")) {
+    throw new Error("selfCheck: erro RAVU deve restaurar o vídeo oculto");
+  }
+  const stillSrc = String(handleStillFrame);
+  const addStillSrc = String(attachDiscoveryListeners);
+  const removeStillSrc = String(detachDiscoveryListeners);
+  if (!stillSrc.includes("event.target !== currentVideo") ||
+      !stillSrc.includes("currentVideo.readyState >= 2") ||
+      stillSrc.split('draw({ newVideoFrame: true })').length !== 2 ||
+      !["pause", "ended", "seeked", "loadeddata"].every((type) =>
+        addStillSrc.includes(`document.addEventListener("${type}", handleStillFrame, true)`) &&
+        removeStillSrc.includes(`document.removeEventListener("${type}", handleStillFrame, true)`))) {
+    throw new Error("selfCheck: frame parado deve capturar só o vídeo atual");
+  }
+  const afterUploadSrc = String(fiAfterVideoUpload);
+  if (afterUploadSrc.indexOf("fiUpdateFpsEligibility()") < 0 ||
+      afterUploadSrc.indexOf("fiUpdateFpsEligibility()") >
+        afterUploadSrc.indexOf("fiEnsureFrameTextures(w, h)")) {
+    throw new Error("selfCheck: fps gate must run before FI allocation/copy");
+  }
+  if (!String(fiShouldPresentMid).includes('fiMethod === "duplicate"') ||
+      String(fiRenderMidToOut).includes('method === "duplicate"')) {
+    throw new Error("selfCheck: duplicate FI must not run another pipeline");
+  }
+  if (String(createOverlay).includes("fiEnsurePrograms") ||
+      String(createOverlay).includes("fiMakeTexture")) {
+    throw new Error("selfCheck: FI resources must stay lazy while disabled");
   }
 
   const severe = selectAutoScale(1, 0, {
@@ -2446,22 +2803,27 @@ function selfCheck() {
   if (recovery.scale !== 0.85 || recovery.stable !== 0) {
     throw new Error("selfCheck: Auto não recuperou após cinco janelas estáveis");
   }
-  if (!shouldUseDisplayScheduler({ videoFps: 60, fps: 24, missedPct: 60 }) ||
-      shouldUseDisplayScheduler({ videoFps: 60, fps: 59, missedPct: 1 })) {
-    throw new Error("selfCheck: fallback de agendamento escolheu o modo errado");
-  }
   if (autoScaleCap(1920, 1080, 60) !== 1 ||
       autoScaleCap(2560, 1440, 60) !== 0.85 ||
       autoScaleCap(3840, 2160, 60) !== 0.7) {
     throw new Error("selfCheck: orçamento de megapixels escolheu escala errada");
   }
-  if (displayPollDelay(100, 105, 60) < 9 ||
-      displayPollDelay(100, 120, 60) !== 0) {
-    throw new Error("selfCheck: polling adaptativo calculou atraso errado");
-  }
   if (adjustedRcasStrength(1, 1) !== 1 ||
       Math.abs(adjustedRcasStrength(1, 3) - 0.7) > 1e-6) {
     throw new Error("selfCheck: proteção de halos calculou intensidade errada");
+  }
+  if (fiOutputFps(24, true) !== 48 || fiOutputFps(30, false) !== 30 ||
+      fiOutputFps(0, true) !== 0 ||
+      !shouldUseRavu(1920, 1080, 1792, 1008, "high") ||
+      shouldUseRavu(1920, 1080, 1792, 1008, "balanced") ||
+      !shouldUseRavu(1280, 720, 1920, 1080, "balanced")) {
+    throw new Error("selfCheck: orçamento FI ou gate RAVU/downscale incorreto");
+  }
+  const frameLoopSrc = String(onFrame);
+  const scheduleIndex = frameLoopSrc.lastIndexOf("schedule();");
+  const drawIndex = frameLoopSrc.indexOf("draw({ newVideoFrame: true");
+  if (scheduleIndex < 0 || drawIndex < 0 || scheduleIndex > drawIndex) {
+    throw new Error("selfCheck: próximo rVFC deve ser armado antes do draw pesado");
   }
   const shaderFixture = "step1: String.raw`um`,\ncompose: String.raw`dois`,";
   if (extractRavuShader(shaderFixture, "step1") !== "um" ||
@@ -2469,14 +2831,20 @@ function selfCheck() {
     throw new Error("selfCheck: parser lazy do RAVU falhou");
   }
 
+  settings = normalizeSettings({ ...DEFAULT_SETTINGS, mode: "native" });
   resetMetricWindow(0);
-  lastPresentedFrames = null;
-  lastMediaTime = null;
+  resetVideoFrameHistory();
   recordVideoFrame(0, { presentedFrames: 1, mediaTime: 0, expectedDisplayTime: 5 });
   recordVideoFrame(20, { presentedFrames: 3, mediaTime: 0.04, expectedDisplayTime: 25 });
-  if (metricWindow.mediaFrames !== 2 || metricWindow.missed !== 1) {
+  recordDraw(2, false);
+  recordDraw(3, true);
+  if (metricWindow.mediaFrames !== 2 || metricWindow.missed !== 1 ||
+      metricWindow.realDrawn !== 1 || metricWindow.midDrawn !== 1 ||
+      metricWindow.cpuSamples !== 1 || fiResumeGap) {
     throw new Error("selfCheck: salto de frames não foi contabilizado corretamente");
   }
+  recordVideoFrame(400, { presentedFrames: 4, mediaTime: 0.4, expectedDisplayTime: 405 });
+  if (!fiResumeGap) throw new Error("selfCheck: lacuna temporal real não reiniciou FI");
 
   console.log(TAG, "selfCheck OK");
 }

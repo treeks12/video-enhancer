@@ -1,4 +1,5 @@
 "use strict";
+const ext = globalThis.browser ?? globalThis.chrome;
 
 const statusChip = document.querySelector("#statusChip");
 const label = document.querySelector("#label");
@@ -67,6 +68,7 @@ const tones = {
 
 const modeNames = {
   off: "Desativado",
+  native: "Nativo",
   rcas: "FSR1",
   ravu: "RAVU-lite",
 };
@@ -140,10 +142,12 @@ function render(state) {
   label.textContent = labels[state.status] || state.status;
   detail.textContent = formatDetail(state);
   hint.textContent = state.settings.mode === "off"
-    ? "Desativado: nenhum processamento na página. Ative RAVU quando quiser."
-    : state.settings.mode === "ravu"
-      ? "RAVU-lite é o modo de qualidade. FSR1 fica como opção leve."
-      : "FSR1 é o modo leve. Use RAVU para máxima qualidade.";
+    ? "Off desliga totalmente o processamento e o overlay nesta página."
+    : state.settings.mode === "native"
+      ? "Nativo mantém o canvas/overlay, mas não aplica RAVU/FSR/RCAS. Use para FI sem filtro."
+      : state.settings.mode === "ravu"
+        ? "RAVU-lite é o modo de qualidade. FSR1 fica como opção leve."
+        : "FSR1 é o modo leve. Use Nativo para testar FI sem upscale.";
 
   setPressed(modeChips, "mode", state.settings.mode);
   setPressed(qualityChips, "quality", state.settings.quality);
@@ -151,17 +155,18 @@ function render(state) {
   setChipDisabled(modeChips, false);
   setChipDisabled(qualityChips, false);
 
-  const effectOn = ["rcas", "ravu"].includes(state.settings.mode);
-  setChipDisabled(interactionChips, !effectOn);
-  strength.disabled = !effectOn;
+  const renderOn = ["native", "rcas", "ravu"].includes(state.settings.mode);
+  const spatialOn = ["rcas", "ravu"].includes(state.settings.mode);
+  setChipDisabled(interactionChips, !renderOn);
+  strength.disabled = !spatialOn;
   strength.value = state.settings.strength;
   strengthValue.textContent = `${state.settings.strength}%`;
-  setChipDisabled(presetChips, !effectOn);
+  setChipDisabled(presetChips, !spatialOn);
   const preset = nearestPreset(state.settings.strength);
   for (const chip of presetChips) {
     chip.setAttribute(
       "aria-pressed",
-      String(effectOn && Number(chip.dataset.strength) === preset),
+      String(spatialOn && Number(chip.dataset.strength) === preset),
     );
   }
 
@@ -194,7 +199,9 @@ function render(state) {
   healthEl.textContent = health.text;
   healthEl.dataset.tone = health.tone;
 
-  fps.textContent = `${state.metrics.videoFps.toFixed(1)} / ${state.metrics.fps.toFixed(1)} fps`;
+  const outputFps = state.metrics.fps +
+    (state.settings.fiInfra ? (state.metrics.midFps || 0) : 0);
+  fps.textContent = `${state.metrics.videoFps.toFixed(1)} / ${outputFps.toFixed(1)} fps`;
   renderScale.textContent = `${Math.round(state.metrics.renderScale * 100)}%`;
   const fi = state.fi || {};
   const methodNames = {
@@ -227,7 +234,7 @@ function render(state) {
       : "Suavização desligada.");
   if (fiExplain) {
     fiExplain.textContent =
-      "Gera um frame no meio (2×) em vídeos ~24/30 fps. Não é nitidez (isso é FSR/RAVU).";
+      "Experimental: gera um meio por par (até 2×) em vídeos ~24/30 fps; em RAVU pode pesar.";
   }
   if (fiStatus && fiStatusTitle && fiStatusDetail) {
     let tone = "off";
@@ -266,17 +273,17 @@ function render(state) {
 }
 
 async function send(type, settings) {
-  return browser.tabs.sendMessage(tabId, { type, settings }, { frameId: 0 });
+  return ext.tabs.sendMessage(tabId, { type, settings }, { frameId: 0 });
 }
 
 async function init() {
   try {
-    const manifest = browser.runtime.getManifest();
+    const manifest = ext.runtime.getManifest();
     versionEl.textContent = `v${manifest.version}`;
   } catch {
     versionEl.textContent = "v—";
   }
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
   tabId = tab && tab.id;
   if (tabId === undefined) throw new Error("Aba ativa não encontrada");
   reload.disabled = false;
@@ -305,8 +312,8 @@ function unavailable() {
 }
 
 async function updateSettings(patch, persist = true) {
+  if (persist) await ext.storage.local.set(patch);
   render(await send("fv-settings", patch));
-  if (persist) await browser.storage.local.set(patch);
 }
 
 for (const chip of modeChips) {
@@ -345,7 +352,7 @@ strength.addEventListener("input", () => {
   }
 });
 strength.addEventListener("change", () => {
-  browser.storage.local.set({ strength: Number(strength.value) });
+  ext.storage.local.set({ strength: Number(strength.value) });
 });
 outline.addEventListener("change", () => {
   updateSettings({ outline: outline.checked }).catch(unavailable);
@@ -378,7 +385,7 @@ toggle.addEventListener("click", async () => {
   }
 });
 reload.addEventListener("click", async () => {
-  await browser.tabs.reload(tabId);
+  await ext.tabs.reload(tabId);
   window.close();
 });
 

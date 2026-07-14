@@ -37,12 +37,15 @@
     if (!gl) throw new Error("WebGL2 indisponível");
     const vertex = extract(source, "VERT");
     const fragment = extract(source, "FRAG");
+    const plainVertex = extract(source, "VERT_PLAIN");
     const program = link(gl, vertex, fragment);
     const easuProgram = link(gl, vertex, extract(source, "EASU_FRAG"));
-    const rcasProgram = link(gl, extract(source, "VERT_PLAIN"), fragment);
+    const rcasProgram = link(gl, plainVertex, fragment);
+    link(gl, plainVertex, extract(source, "FI_BLEND_FRAG"));
+    link(gl, plainVertex, extract(source, "FI_WARP_FRAG"));
     const ravuStepProgram = link(gl, vertex, globalThis.__fvRavuShaders.step1);
     const ravuComposeProgram = link(
-      gl, extract(source, "VERT_PLAIN"), globalThis.__fvRavuShaders.compose,
+      gl, plainVertex, globalThis.__fvRavuShaders.compose,
     );
 
     const pixels = new Uint8Array(3 * 3 * 4).fill(255);
@@ -231,24 +234,12 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       const framebuffer = gl.createFramebuffer();
-
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 960, 540, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      gl.bindTexture(gl.TEXTURE_2D, packed);
-      gl.texImage2D(
-        gl.TEXTURE_2D, 0,
-        gl.getExtension("EXT_color_buffer_float") ? gl.RGBA16F : gl.RGBA8,
-        960, 540, 0, gl.RGBA,
-        gl.getExtension("EXT_color_buffer_float") ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE,
-        null,
-      );
-      gl.bindFramebuffer(gl.FRAMEBUFFER, ravuFramebuffer);
-      gl.framebufferTexture2D(
-        gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, packed, 0,
-      );
+      const floatTarget = Boolean(gl.getExtension("EXT_color_buffer_float"));
 
       const timerQuery = gl.getExtension("EXT_disjoint_timer_query_webgl2");
       async function timeDraws(count) {
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.finish();
         if (timerQuery) {
           const query = gl.createQuery();
           gl.beginQuery(timerQuery.TIME_ELAPSED_EXT, query);
@@ -261,23 +252,43 @@
           gl.deleteQuery(query);
           if (!gl.getParameter(timerQuery.GPU_DISJOINT_EXT)) return milliseconds;
         }
-        const probe = new Uint8Array(4);
-        gl.finish();
         const start = performance.now();
         for (let i = 0; i < count; i++) gl.drawArrays(gl.TRIANGLES, 0, 3);
-        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, probe);
+        gl.finish();
         return (performance.now() - start) / count;
       }
 
       const rows = [];
-      for (const [label, width, height] of [
-        ["1080p", 1920, 1080], ["1440p", 2560, 1440], ["4K", 3840, 2160],
+      for (const [label, sourceWidth, sourceHeight, outputWidth, outputHeight] of [
+        ["1080p → 100%", 1920, 1080, 1920, 1080],
+        ["1080p → 75%", 1920, 1080, 1440, 810],
+        ["1080p → 50%", 1920, 1080, 960, 540],
+        ["4K → 100%", 3840, 2160, 3840, 2160],
+        ["4K → 75%", 3840, 2160, 2880, 1620],
+        ["4K → 50%", 3840, 2160, 1920, 1080],
       ]) {
-        gl.canvas.width = width;
-        gl.canvas.height = height;
-        gl.viewport(0, 0, width, height);
+        gl.canvas.width = outputWidth;
+        gl.canvas.height = outputHeight;
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(
+          gl.TEXTURE_2D, 0, gl.RGBA, sourceWidth, sourceHeight, 0,
+          gl.RGBA, gl.UNSIGNED_BYTE, null,
+        );
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, packed);
+        gl.texImage2D(
+          gl.TEXTURE_2D, 0, floatTarget ? gl.RGBA16F : gl.RGBA8,
+          sourceWidth, sourceHeight, 0, gl.RGBA,
+          floatTarget ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null,
+        );
+        gl.activeTexture(gl.TEXTURE0);
+        gl.viewport(0, 0, outputWidth, outputHeight);
         gl.bindTexture(gl.TEXTURE_2D, intermediate);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.texImage2D(
+          gl.TEXTURE_2D, 0, gl.RGBA, outputWidth, outputHeight, 0,
+          gl.RGBA, gl.UNSIGNED_BYTE, null,
+        );
         gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
         gl.framebufferTexture2D(
           gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, intermediate, 0,
@@ -291,13 +302,19 @@
         gl.useProgram(rcasProgram);
         gl.bindTexture(gl.TEXTURE_2D, intermediate);
         gl.uniform1i(gl.getUniformLocation(rcasProgram, "u_tex"), 0);
-        gl.uniform2f(gl.getUniformLocation(rcasProgram, "u_texel"), 1 / width, 1 / height);
+        gl.uniform2f(
+          gl.getUniformLocation(rcasProgram, "u_texel"),
+          1 / outputWidth, 1 / outputHeight,
+        );
         gl.uniform1f(gl.getUniformLocation(rcasProgram, "u_strength"), 1);
         gl.uniform1f(gl.getUniformLocation(rcasProgram, "u_compare"), 0);
         const rcasMs = await timeDraws(5);
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, ravuFramebuffer);
-        gl.viewport(0, 0, 960, 540);
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, packed, 0,
+        );
+        gl.viewport(0, 0, sourceWidth, sourceHeight);
         gl.useProgram(ravuStepProgram);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -308,7 +325,7 @@
         const ravuStepMs = await timeDraws(3);
 
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, width, height);
+        gl.viewport(0, 0, outputWidth, outputHeight);
         gl.useProgram(ravuComposeProgram);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -316,8 +333,14 @@
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, packed);
         gl.uniform1i(gl.getUniformLocation(ravuComposeProgram, "u_packed"), 1);
-        gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_source_size"), 960, 540);
-        gl.uniform2f(gl.getUniformLocation(ravuComposeProgram, "u_output_texel"), 1 / width, 1 / height);
+        gl.uniform2f(
+          gl.getUniformLocation(ravuComposeProgram, "u_source_size"),
+          sourceWidth, sourceHeight,
+        );
+        gl.uniform2f(
+          gl.getUniformLocation(ravuComposeProgram, "u_output_texel"),
+          1 / outputWidth, 1 / outputHeight,
+        );
         gl.uniform1f(gl.getUniformLocation(ravuComposeProgram, "u_compare"), 0);
         const ravuComposeMs = await timeDraws(5);
         rows.push(
@@ -326,7 +349,7 @@
         );
       }
       document.querySelector("#benchmark").textContent =
-        `${timerQuery ? "Timer GPU" : "Fallback CPU"}\n${rows.join("\n")}`;
+        `${timerQuery ? "Timer GPU" : "Wall clock (gl.finish)"}\n${rows.join("\n")}`;
     }
   }).catch((error) => {
     const message = `FAIL: ${error.message}`;
