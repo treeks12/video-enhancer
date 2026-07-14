@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="description" content="Sharper web video with local WebGL2 processing, FSR1, RAVU-lite, RCAS and experimental frame interpolation.">
+  <title>Video Enhancer — Local WebGL2 video enhancement</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d12;
+      --panel: #12161d;
+      --panel-2: #181d26;
+      --line: #252c38;
+      --text: #f5f7fb;
+      --muted: #9aa5b6;
+      --green: #00d084;
+      --green-soft: rgba(0, 208, 132, .12);
+      --blue: #4d8dff;
+      --blue-soft: rgba(77, 141, 255, .12);
+      --amber: #f7b955;
+      --max: 1160px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-synthesis: none;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 80% 4%, rgba(0, 208, 132, .09), transparent 28rem),
+        radial-gradient(circle at 15% 18%, rgba(77, 141, 255, .08), transparent 24rem),
+        var(--bg);
+      color: var(--text);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+    a { color: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    :focus-visible { outline: 3px solid rgba(77, 141, 255, .7); outline-offset: 3px; }
+
+    .wrap { width: min(calc(100% - 40px), var(--max)); margin-inline: auto; }
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      background: rgba(11, 13, 18, .8);
+      backdrop-filter: blur(18px);
+    }
+    .nav-inner {
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; font-weight: 750; letter-spacing: -.02em; }
+    .brand img { width: 34px; height: 34px; }
+    .nav-links { display: flex; align-items: center; gap: 24px; color: var(--muted); font-size: 14px; }
+    .nav-links a { text-decoration: none; }
+    .nav-links a:hover { color: var(--text); }
+
+    .button {
+      display: inline-flex;
+      min-height: 46px;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      padding: 0 18px;
+      background: var(--green);
+      color: #04130d;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 760;
+      transition: transform .18s ease, filter .18s ease, border-color .18s ease;
+    }
+    .button:hover { transform: translateY(-2px); filter: brightness(1.08); }
+    .button.secondary { border-color: var(--line); background: var(--panel); color: var(--text); }
+    .button.small { min-height: 38px; padding-inline: 14px; border-radius: 10px; }
+
+    .hero {
+      min-height: 760px;
+      display: grid;
+      grid-template-columns: 1.05fr .95fr;
+      align-items: center;
+      gap: 76px;
+      padding: 90px 0 110px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 22px;
+      color: #8ef0c6;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 6px var(--green-soft); }
+    h1 { max-width: 740px; margin: 0; font-size: clamp(52px, 7.2vw, 92px); line-height: .98; letter-spacing: -.065em; }
+    .hero-copy > p { max-width: 620px; margin: 28px 0 0; color: var(--muted); font-size: clamp(18px, 2.1vw, 22px); line-height: 1.55; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
+    .facts { display: flex; flex-wrap: wrap; gap: 12px 20px; margin: 30px 0 0; padding: 0; color: var(--muted); font-size: 13px; list-style: none; }
+    .facts li { display: flex; align-items: center; gap: 8px; }
+    .facts li::before { content: "✓"; color: var(--green); font-weight: 800; }
+
+    .demo-shell {
+      position: relative;
+      min-height: 550px;
+      display: grid;
+      place-items: center;
+    }
+    .demo-shell::before {
+      content: "";
+      position: absolute;
+      inset: 12% 2%;
+      border-radius: 50%;
+      background: rgba(0, 208, 132, .16);
+      filter: blur(80px);
+    }
+    .video-card {
+      position: relative;
+      width: min(100%, 520px);
+      aspect-ratio: 16 / 11;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 24px;
+      background:
+        linear-gradient(145deg, transparent 40%, rgba(0, 208, 132, .12)),
+        linear-gradient(160deg, #263449 0 26%, #121d27 26% 48%, #304f45 48% 58%, #0c141b 58%);
+      box-shadow: 0 28px 90px rgba(0,0,0,.48);
+      transform: perspective(1100px) rotateY(-5deg) rotateX(3deg);
+    }
+    .video-card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 4px);
+      mix-blend-mode: overlay;
+      pointer-events: none;
+    }
+    .browser-bar { height: 44px; display: flex; align-items: center; gap: 7px; padding: 0 16px; border-bottom: 1px solid rgba(255,255,255,.08); background: rgba(10,12,17,.82); }
+    .browser-bar span { width: 8px; height: 8px; border-radius: 50%; background: #4a5261; }
+    .browser-bar span:first-child { background: #f06c75; }
+    .browser-bar span:nth-child(2) { background: #eeb95f; }
+    .browser-bar span:nth-child(3) { background: #43c988; }
+    .frame-label { position: absolute; left: 22px; bottom: 22px; color: rgba(255,255,255,.72); font: 600 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .06em; }
+    .frame-label strong { display: block; margin-top: 7px; color: white; font: 760 20px/1.2 var(--font, inherit); letter-spacing: -.02em; }
+
+    .control-card {
+      position: absolute;
+      right: -24px;
+      bottom: 5px;
+      z-index: 2;
+      width: min(310px, 82%);
+      border: 1px solid #333a48;
+      border-radius: 17px;
+      padding: 16px;
+      background: rgba(20, 24, 32, .94);
+      box-shadow: 0 22px 60px rgba(0,0,0,.48);
+      backdrop-filter: blur(18px);
+    }
+    .control-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .control-brand { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 750; }
+    .control-brand img { width: 26px; height: 26px; }
+    .live { display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; padding: 5px 9px; background: var(--green-soft); color: #8ef0c6; font-size: 10px; font-weight: 700; }
+    .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    .control-label { margin: 12px 0 7px; color: #8993a5; font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { border: 1px solid #353d4b; border-radius: 8px; padding: 7px 9px; background: #202631; color: #9ea8b8; font-size: 10px; font-weight: 650; }
+    .chip.active { border-color: rgba(0,208,132,.55); background: var(--green-soft); color: #9bf3cf; }
+    .meter { height: 7px; overflow: hidden; border-radius: 999px; background: #2b313d; }
+    .meter::before { content: ""; display: block; width: 82%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--green), #43f4bc); }
+
+    .strip { border-block: 1px solid var(--line); background: rgba(18,22,29,.65); }
+    .strip-inner { min-height: 92px; display: grid; grid-template-columns: repeat(4, 1fr); align-items: center; gap: 24px; }
+    .tech { color: var(--muted); font-size: 13px; }
+    .tech strong { display: block; color: var(--text); font-size: 17px; letter-spacing: -.025em; }
+
+    section { padding: 116px 0; }
+    .section-head { display: grid; grid-template-columns: .8fr 1.2fr; gap: 60px; align-items: end; margin-bottom: 54px; }
+    .kicker { color: var(--green); font-size: 13px; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
+    h2 { margin: 8px 0 0; font-size: clamp(38px, 5vw, 62px); line-height: 1.05; letter-spacing: -.055em; }
+    .section-head p { max-width: 570px; margin: 0; color: var(--muted); font-size: 18px; }
+
+    .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .mode {
+      min-height: 310px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 28px;
+      background: linear-gradient(150deg, rgba(255,255,255,.025), transparent 45%), var(--panel);
+    }
+    .mode-number { color: #596476; font: 650 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .mode h3 { margin: auto 0 8px; font-size: 27px; letter-spacing: -.035em; }
+    .mode p { min-height: 4.8em; margin: 0; color: var(--muted); }
+    .mode-tag { align-self: flex-start; margin-top: 22px; border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; color: #aab4c3; font-size: 11px; }
+    .mode:nth-child(2) { border-color: rgba(0,208,132,.28); background: linear-gradient(150deg, rgba(0,208,132,.09), transparent 50%), var(--panel); }
+
+    .pipeline { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; background: var(--panel); }
+    .pipeline article { position: relative; min-height: 215px; padding: 27px; border-right: 1px solid var(--line); }
+    .pipeline article:last-child { border: 0; }
+    .pipeline article:not(:last-child)::after { content: "→"; position: absolute; z-index: 2; right: -13px; top: 29px; width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--bg); color: var(--green); font-size: 13px; }
+    .pipeline small { color: var(--green); font: 700 11px/1 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .pipeline h3 { margin: 56px 0 8px; font-size: 20px; letter-spacing: -.025em; }
+    .pipeline p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .privacy {
+      position: relative;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 70px;
+      align-items: center;
+      border: 1px solid rgba(0,208,132,.24);
+      border-radius: 26px;
+      padding: clamp(32px, 6vw, 68px);
+      background: linear-gradient(125deg, rgba(0,208,132,.09), transparent 60%), var(--panel);
+    }
+    .privacy h2 { font-size: clamp(36px, 4.8vw, 60px); }
+    .privacy p { margin: 22px 0 0; color: var(--muted); font-size: 18px; }
+    .privacy-list { display: grid; gap: 12px; }
+    .privacy-list div { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: rgba(9,12,16,.38); }
+    .privacy-list span { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 8px; background: var(--green-soft); color: var(--green); font-weight: 800; }
+    .privacy-list strong { display: block; font-size: 14px; }
+    .privacy-list small { color: var(--muted); }
+
+    .limits { display: grid; grid-template-columns: 1fr 1.15fr; gap: 70px; align-items: start; }
+    .limits h2 { position: sticky; top: 112px; }
+    .limit-list { display: grid; gap: 12px; }
+    .limit { border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; background: var(--panel); }
+    .limit strong { display: block; margin-bottom: 4px; font-size: 15px; }
+    .limit p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .cta { padding-top: 36px; }
+    .cta-box { border: 1px solid var(--line); border-radius: 26px; padding: 72px 28px; text-align: center; background: linear-gradient(180deg, rgba(77,141,255,.07), transparent), var(--panel); }
+    .cta-box h2 { max-width: 820px; margin-inline: auto; }
+    .cta-box p { max-width: 600px; margin: 20px auto 30px; color: var(--muted); font-size: 18px; }
+    .cta-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; }
+
+    footer { padding: 52px 0; color: var(--muted); font-size: 13px; }
+    .footer-inner { display: flex; justify-content: space-between; gap: 24px; padding-top: 30px; border-top: 1px solid var(--line); }
+    footer a { text-decoration: none; }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 900px) {
+      .nav-links > a:not(.button) { display: none; }
+      .hero { grid-template-columns: 1fr; gap: 28px; padding-top: 72px; }
+      .hero-copy { text-align: center; }
+      .hero-copy > p { margin-inline: auto; }
+      .hero-actions, .facts { justify-content: center; }
+      .demo-shell { min-height: 500px; }
+      .video-card { transform: none; }
+      .control-card { right: 0; }
+      .strip-inner { grid-template-columns: repeat(2, 1fr); padding-block: 24px; }
+      .section-head, .privacy, .limits { grid-template-columns: 1fr; gap: 28px; }
+      .mode-grid { grid-template-columns: 1fr; }
+      .mode { min-height: 245px; }
+      .pipeline { grid-template-columns: 1fr 1fr; }
+      .pipeline article:nth-child(2) { border-right: 0; }
+      .pipeline article:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .pipeline article::after { display: none !important; }
+      .limits h2 { position: static; }
+    }
+
+    @media (max-width: 560px) {
+      .wrap { width: min(calc(100% - 24px), var(--max)); }
+      .nav-inner { min-height: 62px; }
+      .nav .button { display: none; }
+      h1 { font-size: clamp(48px, 16vw, 68px); }
+      .hero { min-height: auto; padding: 62px 0 78px; }
+      .hero-actions .button { width: 100%; }
+      .demo-shell { min-height: 420px; }
+      .video-card { align-self: start; border-radius: 18px; }
+      .control-card { right: 50%; bottom: 0; transform: translateX(50%); width: 90%; }
+      .strip-inner, .pipeline { grid-template-columns: 1fr; }
+      .pipeline article { min-height: 170px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .pipeline article h3 { margin-top: 28px; }
+      section { padding: 82px 0; }
+      .section-head { margin-bottom: 34px; }
+      .privacy { border-radius: 20px; }
+      .footer-inner { flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav" aria-label="Primary navigation">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top"><img src="icon.svg" alt=""> Video Enhancer</a>
+      <div class="nav-links">
+        <a href="#modes">Modes</a>
+        <a href="#how">How it works</a>
+        <a href="#privacy">Privacy</a>
+        <a class="button small secondary" href="https://github.com/treeks12/video-enhancer" rel="noreferrer">View source ↗</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <div class="wrap hero">
+      <div class="hero-copy">
+        <div class="eyebrow">Local WebGL2 processing</div>
+        <h1>Sharper video. Right in your browser.</h1>
+        <p>Upscale, reconstruct and sharpen the main video on a page with FSR1, RAVU-lite and RCAS — without uploading a single frame.</p>
+        <div class="hero-actions">
+          <a class="button" href="https://github.com/treeks12/video-enhancer/releases/latest">Get the latest release ↓</a>
+          <a class="button secondary" href="#how">See how it works</a>
+        </div>
+        <ul class="facts" aria-label="Key facts">
+          <li>Firefox & Chromium</li>
+          <li>No telemetry</li>
+          <li>One permission</li>
+        </ul>
+      </div>
+
+      <div class="demo-shell" aria-label="Video Enhancer interface preview">
+        <div class="video-card">
+          <div class="browser-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="frame-label">LOCAL PROCESSING<strong>1792 × 1008 · frame 24</strong></div>
+        </div>
+        <div class="control-card">
+          <div class="control-top">
+            <div class="control-brand"><img src="icon.svg" alt=""> Video Enhancer</div>
+            <div class="live">Rendering</div>
+          </div>
+          <div class="control-label">Effect</div>
+          <div class="chips"><span class="chip">Off</span><span class="chip">Native</span><span class="chip">FSR1</span><span class="chip active">RAVU · quality</span></div>
+          <div class="control-label">RCAS sharpness · 82%</div>
+          <div class="meter"></div>
+          <div class="control-label">Quality</div>
+          <div class="chips"><span class="chip active">100%</span><span class="chip">75%</span><span class="chip">50%</span><span class="chip">Auto</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="strip">
+      <div class="wrap strip-inner">
+        <div class="tech"><strong>FSR1</strong>EASU upscaling</div>
+        <div class="tech"><strong>RAVU-lite</strong>Adaptive reconstruction</div>
+        <div class="tech"><strong>RCAS</strong>Contrast-aware sharpening</div>
+        <div class="tech"><strong>2× experimental</strong>Frame interpolation</div>
+      </div>
+    </div>
+
+    <section id="modes">
+      <div class="wrap">
+        <div class="section-head">
+          <div><div class="kicker">Choose your path</div><h2>Three useful modes. No mystery switches.</h2></div>
+          <p>Start with the lightest option that solves the problem. Quality controls and GPU-budget adaptation keep the workload practical on real hardware.</p>
+        </div>
+        <div class="mode-grid">
+          <article class="mode"><span class="mode-number">01 / NATIVE</span><h3>Keep the pixels honest</h3><p>Runs the video through the local rendering path without enhancement. Useful for comparison and experimental smoothing.</p><span class="mode-tag">Baseline</span></article>
+          <article class="mode"><span class="mode-number">02 / FSR1</span><h3>Fast, clean upscaling</h3><p>EASU reconstructs the image while RCAS restores crisp detail. The best starting point for most videos.</p><span class="mode-tag">Recommended</span></article>
+          <article class="mode"><span class="mode-number">03 / RAVU</span><h3>More adaptive detail</h3><p>RAVU-lite applies learned reconstruction before RCAS. It can reveal more structure when the GPU budget allows it.</p><span class="mode-tag">Quality focused</span></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <div><div class="kicker">Under the hood</div><h2>A short path from video to screen.</h2></div>
+          <p>Everything happens locally in a WebGL2 pipeline. The extension monitors timing and can reduce work when a chosen effect becomes too expensive.</p>
+        </div>
+        <div class="pipeline">
+          <article><small>01</small><h3>Find the main video</h3><p>The top-level page's primary HTML5 video becomes the source.</p></article>
+          <article><small>02</small><h3>Sample each frame</h3><p>The current frame is uploaded directly into the local GPU pipeline.</p></article>
+          <article><small>03</small><h3>Apply the effect</h3><p>FSR1 or RAVU-lite reconstructs; RCAS controls final sharpness.</p></article>
+          <article><small>04</small><h3>Present and adapt</h3><p>The enhanced frame is shown while timing guards protect playback.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="privacy">
+      <div class="wrap privacy">
+        <div><div class="kicker">Private by construction</div><h2>Your video never leaves the page.</h2><p>There is no account, cloud processor, analytics SDK or remote model. The browser and your GPU do the work.</p></div>
+        <div class="privacy-list">
+          <div><span>✓</span><div><strong>No telemetry</strong><small>No usage or performance data is collected.</small></div></div>
+          <div><span>✓</span><div><strong>No video uploads</strong><small>Frames are processed locally with WebGL2.</small></div></div>
+          <div><span>✓</span><div><strong>Only storage permission</strong><small>Used solely to remember local preferences.</small></div></div>
+          <div><span>✓</span><div><strong>Open source</strong><small>The full implementation is available on GitHub.</small></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="wrap limits">
+        <div><div class="kicker">Honest limits</div><h2>Experimental means experimental.</h2></div>
+        <div class="limit-list">
+          <article class="limit"><strong>Frame interpolation is not RIFE</strong><p>The lightweight experimental path can show ghosting around occlusions, fast motion and scene cuts.</p></article>
+          <article class="limit"><strong>Some protected video cannot be captured</strong><p>DRM restrictions and cross-origin policies can prevent local processing.</p></article>
+          <article class="limit"><strong>GPU cost still matters</strong><p>RAVU and interpolation may be reduced or cancelled when they exceed the available rendering budget.</p></article>
+          <article class="limit"><strong>One main video at a time</strong><p>Videos inside iframes and secondary players are intentionally outside the current scope.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="wrap cta-box">
+        <div class="kicker">Version 0.0.53</div>
+        <h2>Give low-resolution video a better final pass.</h2>
+        <p>Download the Firefox or Chromium package, choose an effect, and let the local GPU pipeline do the rest.</p>
+        <div class="cta-actions">
+          <a class="button" href="https://github.com/treeks12/video-enhancer/releases/latest">Download release ↓</a>
+          <a class="button secondary" href="https://github.com/treeks12/video-enhancer#how-to-use">Installation guide ↗</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap footer-inner">
+      <span>Video Enhancer · Open source on GitHub.</span>
+      <span><a href="https://github.com/treeks12/video-enhancer">GitHub</a> · <a href="https://github.com/treeks12/video-enhancer/issues">Report an issue</a></span>
+    </div>
+  </footer>
+</body>
+</html>
