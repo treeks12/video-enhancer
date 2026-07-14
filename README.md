@@ -1,5 +1,7 @@
 # Video Enhancer
 
+[Website](https://treeks12.github.io/video-enhancer/) · [Releases](https://github.com/treeks12/video-enhancer/releases)
+
 ## What it does
 
 Enhances the main video on a page locally with WebGL2:
