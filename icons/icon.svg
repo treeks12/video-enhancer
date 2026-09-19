@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Firefox Video Enhancer">
+  <defs>
+    <linearGradient id="bg" x1="8" y1="6" x2="40" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1a3d32"/>
+      <stop offset="1" stop-color="#0d221c"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="48" rx="12" fill="url(#bg)"/>
+  <rect x="1" y="1" width="46" height="46" rx="11" fill="none" stroke="#00d084" stroke-opacity=".35" stroke-width="2"/>
+  <path d="M10 32 L18 14 L24 26 L30 16 L38 32" fill="none" stroke="#00d084" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M10 36 H38" fill="none" stroke="#00d084" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+</svg>

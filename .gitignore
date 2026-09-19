@@ -1,0 +1,8 @@
+# Firefox Video Enhancer local
+*.zip
+.DS_Store
+Thumbs.db
+node_modules/
+dist/
+__pycache__/
+test/rife-webgpu/

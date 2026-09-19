@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extensionName__",
+  "version": "0.0.61",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{dd5315db-3143-41d7-aa7d-2cf6a225d7fc}",
+      "data_collection_permissions": {
+        "required": ["none"]
+      },
+      "strict_min_version": "142.0"
+    }
+  },
+  "permissions": ["storage"],
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "action": {
+    "default_title": "__MSG_extensionName__",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "48": "icons/icon.svg",
+      "96": "icons/icon.svg"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "third_party/ravu-lite/ravu-lite-lut3.bin",
+        "third_party/ravu-lite/ravu-lite-webgl2.js"
+      ],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["fi-core.js", "fi-webgpu.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

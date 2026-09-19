@@ -1,0 +1,110 @@
+[
+  {
+    "name": "static",
+    "method": "block",
+    "confidence": 1,
+    "residual": 0,
+    "motionX": 0,
+    "mae": 0,
+    "blendMae": 0,
+    "holdMae": 0,
+    "cpuMedianMs": 0.2000000011175871,
+    "cpuP95Ms": 0.3999999985098839
+  },
+  {
+    "name": "subpixel-pan",
+    "method": "block",
+    "confidence": 0.6894691583782449,
+    "residual": 5.164904407768244,
+    "motionX": 0.6764659448103472,
+    "mae": 0.7920765817901234,
+    "blendMae": 1.6030092592592593,
+    "holdMae": 7.458092206790123,
+    "cpuMedianMs": 8.900000000372529,
+    "cpuP95Ms": 9.799999998882413
+  },
+  {
+    "name": "diagonal-pan",
+    "method": "block",
+    "confidence": 0.9924577130512757,
+    "residual": 0.03664772727272727,
+    "motionX": 2.9727272727272727,
+    "mae": 0.0038580246913580245,
+    "blendMae": 29.005208333333332,
+    "holdMae": 37.121937692901234,
+    "cpuMedianMs": 5.599999999627471,
+    "cpuP95Ms": 6.099999999627471
+  },
+  {
+    "name": "fast-pan",
+    "method": "block",
+    "confidence": 0.9580205673292844,
+    "residual": 0.26120011413982597,
+    "motionX": 7.598712948999706,
+    "mae": 0.10754243827160494,
+    "blendMae": 48.037905092592595,
+    "holdMae": 48.925998263888886,
+    "cpuMedianMs": 8.600000001490116,
+    "cpuP95Ms": 9.800000000745058
+  },
+  {
+    "name": "opposing-motion",
+    "method": "block",
+    "confidence": 0.9211081161832311,
+    "residual": 0.8927556818181818,
+    "motionX": 0.06363636363636363,
+    "mae": 3.472704475308642,
+    "blendMae": 22.43094135802469,
+    "holdMae": 31.070722415123456,
+    "cpuMedianMs": 5.600000001490116,
+    "cpuP95Ms": 5.800000000745058
+  },
+  {
+    "name": "foreground-occlusion",
+    "method": "block",
+    "confidence": 0.9637577360056574,
+    "residual": 0.1299715909090909,
+    "motionX": 1.2,
+    "mae": 1.6998697916666667,
+    "blendMae": 11.419222608024691,
+    "holdMae": 14.158396026234568,
+    "cpuMedianMs": 2,
+    "cpuP95Ms": 2.600000001490116
+  },
+  {
+    "name": "fixed-subtitles",
+    "method": "block",
+    "confidence": 0.8840867336855306,
+    "residual": 2.0951887427981206,
+    "motionX": 2.26951375447891,
+    "mae": 4.602309992283951,
+    "blendMae": 25.82130111882716,
+    "holdMae": 32.39252989969136,
+    "cpuMedianMs": 6,
+    "cpuP95Ms": 6.199999999254942
+  },
+  {
+    "name": "scene-cut",
+    "method": "duplicate",
+    "confidence": 0.5,
+    "residual": null,
+    "motionX": null,
+    "mae": 200,
+    "blendMae": 100,
+    "holdMae": 200,
+    "cpuMedianMs": 0.09999999962747097,
+    "cpuP95Ms": 0.10000000149011612
+  },
+  {
+    "name": "same-histogram-cut",
+    "method": "duplicate",
+    "confidence": 0.07638651862232218,
+    "residual": 49.09161177564016,
+    "motionX": 0.09415136483413251,
+    "mae": 83.39583333333333,
+    "blendMae": 41.69444444444444,
+    "holdMae": 83.39583333333333,
+    "cpuMedianMs": 8.400000000372529,
+    "cpuP95Ms": 8.899999998509884
+  }
+]
