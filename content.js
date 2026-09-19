@@ -1,5 +1,6 @@
 "use strict";
 const ext = globalThis.browser ?? globalThis.chrome;
+if (typeof FiQuality === "undefined" && typeof require === "function") globalThis.FiQuality = require("./fi-quality.js");
 /*
  * Firefox Video Enhancer
  *
@@ -1154,6 +1155,8 @@ function fiRequestGpuPair() {
       fiSkipReason = "Motion arrived after its frame; keeping the presentation cadence.";
       return;
     }
+    result.forward = FiQuality.regularize(result.forward, fiPrevLuma, fiLumaW, fiLumaH);
+    result.backward = FiQuality.regularize(result.backward, fiCurrLuma, fiLumaW, fiLumaH);
     const pair = fiBidirectionalConsistency(result.forward, result.backward);
     fiConfidence = pair ? pair.confidence : 0;
     if (!pair || (settings.fiSceneCut && fiIsSceneCut(score) && fiConfidence < .2 &&
@@ -1286,23 +1289,7 @@ const fiHalfF32 = new Float32Array(fiHalfBits);
 const fiHalfU32 = new Uint32Array(fiHalfBits);
 
 function fiFloatToHalf(value) {
-  // IEEE binary32 → binary16. Truncation is fine: the 1/2048 relative step of
-  // a half is orders of magnitude below any motion-vector visual threshold.
-  // Float32Array and Uint32Array share platform endianness, so the bit view is
-  // always coherent (a DataView defaults to big-endian and would scramble it).
-  fiHalfF32[0] = Number.isFinite(value) ? value : 0;
-  const bits = fiHalfU32[0];
-  const sign = (bits >>> 16) & 0x8000;
-  const exponent = (bits >>> 23) & 0xff;
-  const mantissa = bits & 0x7fffff;
-  if (exponent === 255) return sign | 0x7c00 | (mantissa ? 1 : 0);
-  const halfExponent = exponent - 127 + 15;
-  if (halfExponent >= 31) return sign | 0x7c00;
-  if (halfExponent <= 0) {
-    if (halfExponent < -10) return sign;
-    return sign | ((mantissa | 0x800000) >>> (1 - halfExponent));
-  }
-  return sign | (halfExponent << 10) | (mantissa >>> 13);
+  return FiQuality.floatToHalf(value);
 }
 
 function fiUploadMvTexture(match, texture) {
@@ -1325,30 +1312,11 @@ function fiUploadMvTexture(match, texture) {
     const gx = i % gridW;
     const gy = Math.floor(i / gridW);
     const c = confidences ? confidences[i] : match.confidence;
-    let sumX = 0;
-    let sumY = 0;
-    let sumW = 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const nx = gx + dx;
-        const ny = gy + dy;
-        if (nx < 0 || ny < 0 || nx >= gridW || ny >= gridH) continue;
-        const ni = ny * gridW + nx;
-        // Smooth only vectors from the same motion region; foreground/background
-        // disagreement is an edge to preserve, not an outlier to average away.
-        if (Math.hypot(mvs[ni * 2] - mvs[i * 2], mvs[ni * 2 + 1] - mvs[i * 2 + 1]) > 1.5) continue;
-        const w = 0.05 + (confidences ? confidences[ni] : match.confidence);
-        sumX += mvs[ni * 2] * w;
-        sumY += mvs[ni * 2 + 1] * w;
-        sumW += w;
-      }
-    }
-    const avgX = sumW ? sumX / sumW : mvs[i * 2];
-    const avgY = sumW ? sumY / sumW : mvs[i * 2 + 1];
-    data[p] = fiFloatToHalf(mvs[i * 2] * 0.8 + avgX * 0.2);
-    data[p + 1] = fiFloatToHalf(mvs[i * 2 + 1] * 0.8 + avgY * 0.2);
+    const valid = FiQuality.validFlow(mvs[i * 2], mvs[i * 2 + 1], Math.max(fiLumaW, fiLumaH, 1));
+    data[p] = fiFloatToHalf(valid ? mvs[i * 2] : 0);
+    data[p + 1] = fiFloatToHalf(valid ? mvs[i * 2 + 1] : 0);
     data[p + 2] = 0;
-    data[p + 3] = fiFloatToHalf(c);
+    data[p + 3] = fiFloatToHalf(valid && Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0);
   }
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texImage2D(
