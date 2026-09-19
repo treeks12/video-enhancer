@@ -4,10 +4,10 @@ Requires Python 3 and Node.js. Explicit noncommercial-license acknowledgement.
 from pathlib import Path
 import argparse, hashlib, json, subprocess, tempfile, urllib.request
 ROOT=Path(__file__).resolve().parents[1]
-BASE='https://cdn.jsdelivr.net/npm/framegen@1.4.7/weights/'
+BASE='https://cdn.jsdelivr.net/npm/framegen@1.4.0/weights/'
 
 def download(name, limit):
-    request=urllib.request.Request(BASE+name,headers={'User-Agent':'VideoEnhancer-ModelInstaller/0.0.62'})
+    request=urllib.request.Request(BASE+name,headers={'User-Agent':'VideoEnhancer-ModelInstaller/0.0.63'})
     with urllib.request.urlopen(request,timeout=60) as r:
         if r.geturl()!=BASE+name: raise RuntimeError('Unexpected model redirect')
         data=r.read(limit+1)

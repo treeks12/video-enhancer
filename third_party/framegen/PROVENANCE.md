@@ -3,8 +3,11 @@
 - Upstream: https://github.com/MONZikWasTaken/Framegen
 - Pinned release: v1.4.7; commit 83a3e338cb3b9391b05c4d85a5fd8534a8aafa32.
 - Upstream graph reference: web/rt/rt.js, blob 6cf8b1bc889813ab19675c08b7608a5a5f05af36.
-- Model data: framegen@1.4.7/weights/rt_v7s.bin and rt_v7s.json.
-- Download source: https://cdn.jsdelivr.net/npm/framegen@1.4.7/weights/
+- Model data: framegen@1.4.0/weights/rt_v7s.bin and rt_v7s.json.
+- Download source: https://cdn.jsdelivr.net/npm/framegen@1.4.0/weights/
+- npm stopped publishing framegen after 1.4.0. The 1.4.0 tarball weights are
+  byte-identical to the v1.4.7 tag assets (git blobs 727489fb8bb9dffbb7a32a2efef07c2bfacc843f
+  and e8fc44e2fc0183505bdfb269f69197a3f54e1405), verified 2026-09-19.
 - Licenses: MIT for adapted code; separate noncommercial weights terms.
 
 The runtime here is a dense, tiled, compact graph implementation. It is not the

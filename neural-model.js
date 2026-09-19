@@ -1,8 +1,10 @@
 /* Model data only: no remote JavaScript, WGSL or executable graph is accepted. */
 (function(scope){
  'use strict';
- const KEY='fvNeuralModelV1', ID='framegen-1.4.7-v7-small';
- const BASE='https://cdn.jsdelivr.net/npm/framegen@1.4.7/weights/';
+ const KEY='fvNeuralModelV1', ID='framegen-1.4.0-v7-small';
+ // npm publishes framegen only up to 1.4.0; its weights are byte-identical to
+ // the upstream GitHub tag v1.4.7 (git blobs 727489fb… / e8fc44e2…).
+ const BASE='https://cdn.jsdelivr.net/npm/framegen@1.4.0/weights/';
  const ext=scope.browser??scope.chrome;
  function encode(bytes){let s='';for(let i=0;i<bytes.length;i+=16384)s+=String.fromCharCode(...bytes.subarray(i,i+16384));return btoa(s);}
  function decode(s){if(typeof s!=='string'||s.length>12*1024*1024)throw new Error('Invalid cached model');const v=atob(s),a=new Uint8Array(v.length);for(let i=0;i<v.length;i++)a[i]=v.charCodeAt(i);return a.buffer;}

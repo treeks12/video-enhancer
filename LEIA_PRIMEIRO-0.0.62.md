@@ -20,7 +20,7 @@ Extraia `video-enhancer-chromium-0.0.62.zip`. Na página de extensões, habilite
 
 ### Pesos neurais
 
-No popup, abra **Neural model setup**. Leia os termos, marque a confirmação e use **Download and install model**. O download obtém somente os arquivos de dados `rt_v7s.json` e `rt_v7s.bin` do pacote versionado `framegen@1.4.7`. O upstream descreve aproximadamente 2,9 MB de pesos. A permissão para o domínio de download é opcional, solicitada nesse clique e removida ao terminar. Nenhum frame de vídeo é enviado.
+No popup, abra **Neural model setup**. Leia os termos, marque a confirmação e use **Download and install model**. O download obtém somente os arquivos de dados `rt_v7s.json` e `rt_v7s.bin` do pacote `framegen@1.4.0` do npm (o npm não publica nada além da 1.4.0; esses pesos são byte-idênticos aos da tag GitHub v1.4.7. O pin original na 1.4.7 dava HTTP 404 e foi corrigido em 0.0.63). O upstream descreve aproximadamente 2,9 MB de pesos. A permissão para o domínio de download é opcional, solicitada nesse clique e removida ao terminar. Nenhum frame de vídeo é enviado.
 
 Depois, selecione **Compact neural (experimental)** em Engine, habilite Frame interpolation e escolha Balanced ou High quality. O modo Original mantém a imagem sem upscale, mas permite testar a interpolação separadamente. FSR1 e RAVU continuam disponíveis e também processam os frames intermediários.
 
