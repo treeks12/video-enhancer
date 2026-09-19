@@ -1,0 +1,14 @@
+{
+  "ui": "PASS",
+  "tested": [
+    "popup render",
+    "profile change",
+    "model setup action",
+    "neural confidence not fabricated",
+    "fallback explanation",
+    "no horizontal overflow"
+  ],
+  "browser": "144.0.7559.96",
+  "gpuAvailable": false,
+  "note": "Synthetic state for UI only. Screenshot metrics are fixtures, not measured performance."
+}

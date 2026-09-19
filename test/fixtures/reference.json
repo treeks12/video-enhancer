@@ -1,0 +1,70 @@
+{
+  "kind": "untrained mathematical fixture, not quality evidence",
+  "torch": "2.10.0+cpu",
+  "modelWidth": 32,
+  "modelHeight": 32,
+  "sourceWidth": 64,
+  "sourceHeight": 48,
+  "cases": [
+    {
+      "half": false,
+      "t": 0.0,
+      "file": "gold-f32-00.rgba",
+      "finite": true
+    },
+    {
+      "half": false,
+      "t": 0.25,
+      "file": "gold-f32-25.rgba",
+      "finite": true
+    },
+    {
+      "half": false,
+      "t": 0.5,
+      "file": "gold-f32-50.rgba",
+      "finite": true
+    },
+    {
+      "half": false,
+      "t": 0.75,
+      "file": "gold-f32-75.rgba",
+      "finite": true
+    },
+    {
+      "half": false,
+      "t": 1.0,
+      "file": "gold-f32-100.rgba",
+      "finite": true
+    },
+    {
+      "half": true,
+      "t": 0.0,
+      "file": "gold-f16-00.rgba",
+      "finite": true
+    },
+    {
+      "half": true,
+      "t": 0.25,
+      "file": "gold-f16-25.rgba",
+      "finite": true
+    },
+    {
+      "half": true,
+      "t": 0.5,
+      "file": "gold-f16-50.rgba",
+      "finite": true
+    },
+    {
+      "half": true,
+      "t": 0.75,
+      "file": "gold-f16-75.rgba",
+      "finite": true
+    },
+    {
+      "half": true,
+      "t": 1.0,
+      "file": "gold-f16-100.rgba",
+      "finite": true
+    }
+  ]
+}

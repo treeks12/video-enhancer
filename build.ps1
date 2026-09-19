@@ -23,6 +23,16 @@ if (-not $firefoxVersion -or $firefoxVersion -ne $chromiumVersion) {
 $dist = Join-Path $root "dist"
 $runtimeFiles = @(
     "content.js"
+    "fi-quality.js"
+    "fi-neural-runtime.js"
+    "neural-model.js"
+    "fi-neural.js"
+    "models.html"
+    "models.js"
+    "models.css"
+    "third_party/framegen/LICENSE"
+    "third_party/framegen/WEIGHTS_LICENSE.md"
+    "third_party/framegen/PROVENANCE.md"
     "fi-core.js"
     "fi-webgpu.js"
     "popup.html"
@@ -40,6 +50,11 @@ $runtimeFiles = @(
     "third_party/ravu-lite/ravu-lite-lut3.bin"
     "third_party/ravu-lite/ravu-lite-webgl2.js"
 )
+
+$bundledManifest = Join-Path $root "models/rt_v7s.json"
+$bundledWeights = Join-Path $root "models/rt_v7s.bin"
+if ((Test-Path $bundledManifest) -ne (Test-Path $bundledWeights)) { throw "Incomplete offline model." }
+if (Test-Path $bundledManifest) { $runtimeFiles += @("models/rt_v7s.json", "models/rt_v7s.bin") }
 
 foreach ($relativePath in $runtimeFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $relativePath) -PathType Leaf)) {
@@ -61,7 +76,12 @@ function New-Package([string]$Name, [string]$Manifest) {
     }
     New-Item -ItemType Directory -Path $target -Force | Out-Null
 
-    Copy-Item -LiteralPath $Manifest -Destination (Join-Path $target "manifest.json")
+    $manifestData = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+    if (-not (Test-Path $bundledManifest)) {
+        $manifestData.web_accessible_resources[0].resources = @($manifestData.web_accessible_resources[0].resources | Where-Object { $_ -notlike "models/*" })
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [IO.File]::WriteAllText((Join-Path $target "manifest.json"), ($manifestData | ConvertTo-Json -Depth 20), $utf8NoBom)
     foreach ($relativePath in $runtimeFiles) {
         $destination = Join-Path $target $relativePath
         New-Item -ItemType Directory -Path (Split-Path $destination) -Force | Out-Null

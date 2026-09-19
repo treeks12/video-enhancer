@@ -137,6 +137,8 @@ const schedulerHarness = loadFunctions(`${coreSource}\n${contentSource}`, [
   let fiMidRaf = null;
   let fiPairSerial = 1;
   let fiMethod = 'webgpu';
+  let fiGpuEngine = {kind: 'classic'};
+  let fiNeuralTarget = null, fiNeuralResult = null, fiDisplayReference = 0;
   let fiGpuReadySerial = 1;
   let fiHasCurr = true;
   let fiSkipReason = '';
@@ -281,3 +283,24 @@ close(recordHarness.context.expectedOnlyDuration, 1000 / 30,
   'skipped callback normalizes expected-display delta without media time');
 
 console.log('PASS: interpolation cadence covers 24/30/60 fps, fallbacks, skips, and deadlines');
+
+// Neural output has a fixed inferred phase and must never be relabelled after
+// arriving at a different display tick. Exercise the actual production branch.
+vm.runInContext(`
+ globalThis.configureNeural = (target, method='neural') => {
+   fiGpuEngine = {kind:'neural'}; fiNeuralTarget=target;
+   fiNeuralResult={phase:target.phase}; fiMethod=method;
+ };
+ globalThis.neuralReady = () => {fiMethod='neural';};
+`, schedulerHarness.context);
+schedulerHarness.context.configureScheduler({now:5000,sourceFps:30,costMs:1});
+schedulerHarness.context.configureNeural({time:5016.667,phase:.5,expires:5026.667});
+schedulerHarness.context.scheduleMid(1,{expectedDisplayTime:5000});
+schedulerHarness.context.runDisplayTick(5008);assert.equal(schedulerHarness.context.schedulerResult().draws.length,0);
+schedulerHarness.context.runDisplayTick(5016.667);assert.equal(schedulerHarness.context.schedulerResult().draws.length,1);assert.equal(schedulerHarness.context.schedulerResult().draws[0].fiPhase,.5);
+schedulerHarness.context.configureScheduler({now:6000,sourceFps:30,costMs:1});
+schedulerHarness.context.configureNeural({time:6016.667,phase:.5,expires:6026.667},'pending');
+schedulerHarness.context.scheduleMid(1,{expectedDisplayTime:6000});schedulerHarness.context.runDisplayTick(6016.667);schedulerHarness.context.neuralReady();schedulerHarness.context.runDisplayTick(6033.334);
+assert.equal(schedulerHarness.context.schedulerResult().draws.length,0,'late neural frame must not be displayed');
+assert.equal(schedulerHarness.context.schedulerResult().pending,0);
+console.log('PASS: neural scheduler preserves inferred phase and drops expired output');

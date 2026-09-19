@@ -1,0 +1,331 @@
+{
+  "block0.conv0.0.0.weight": {
+    "shape": [
+      4,
+      6,
+      3,
+      3
+    ],
+    "offset": 0
+  },
+  "block0.conv0.0.0.bias": {
+    "shape": [
+      4
+    ],
+    "offset": 216
+  },
+  "block0.conv0.0.1.weight": {
+    "shape": [
+      4
+    ],
+    "offset": 220
+  },
+  "block0.conv0.1.0.weight": {
+    "shape": [
+      8,
+      4,
+      3,
+      3
+    ],
+    "offset": 224
+  },
+  "block0.conv0.1.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 512
+  },
+  "block0.conv0.1.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 520
+  },
+  "block0.convblock.0.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 528
+  },
+  "block0.convblock.0.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 1104
+  },
+  "block0.convblock.0.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 1112
+  },
+  "block0.convblock.1.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 1120
+  },
+  "block0.convblock.1.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 1696
+  },
+  "block0.convblock.1.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 1704
+  },
+  "block0.convblock.2.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 1712
+  },
+  "block0.convblock.2.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 2288
+  },
+  "block0.convblock.2.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 2296
+  },
+  "block0.convblock.3.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 2304
+  },
+  "block0.convblock.3.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 2880
+  },
+  "block0.convblock.3.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 2888
+  },
+  "block0.convblock.4.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 2896
+  },
+  "block0.convblock.4.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 3472
+  },
+  "block0.convblock.4.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 3480
+  },
+  "block0.convblock.5.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 3488
+  },
+  "block0.convblock.5.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 4064
+  },
+  "block0.convblock.5.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 4072
+  },
+  "block0.convblock.6.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 4080
+  },
+  "block0.convblock.6.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 4656
+  },
+  "block0.convblock.6.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 4664
+  },
+  "block0.convblock.7.0.weight": {
+    "shape": [
+      8,
+      8,
+      3,
+      3
+    ],
+    "offset": 4672
+  },
+  "block0.convblock.7.0.bias": {
+    "shape": [
+      8
+    ],
+    "offset": 5248
+  },
+  "block0.convblock.7.1.weight": {
+    "shape": [
+      8
+    ],
+    "offset": 5256
+  },
+  "block0.lastconv.weight": {
+    "shape": [
+      8,
+      5,
+      4,
+      4
+    ],
+    "offset": 5264
+  },
+  "block0.lastconv.bias": {
+    "shape": [
+      5
+    ],
+    "offset": 5904
+  },
+  "film.0.weight": {
+    "shape": [
+      4,
+      1
+    ],
+    "offset": 5909
+  },
+  "film.0.bias": {
+    "shape": [
+      4
+    ],
+    "offset": 5913
+  },
+  "film.2.weight": {
+    "shape": [
+      16,
+      4
+    ],
+    "offset": 5917
+  },
+  "film.2.bias": {
+    "shape": [
+      16
+    ],
+    "offset": 5981
+  },
+  "refine.c0.weight": {
+    "shape": [
+      4,
+      11,
+      3,
+      3
+    ],
+    "offset": 5997
+  },
+  "refine.c0.bias": {
+    "shape": [
+      4
+    ],
+    "offset": 6393
+  },
+  "refine.a0.weight": {
+    "shape": [
+      4
+    ],
+    "offset": 6397
+  },
+  "refine.c1.weight": {
+    "shape": [
+      4,
+      4,
+      3,
+      3
+    ],
+    "offset": 6401
+  },
+  "refine.c1.bias": {
+    "shape": [
+      4
+    ],
+    "offset": 6545
+  },
+  "refine.a1.weight": {
+    "shape": [
+      4
+    ],
+    "offset": 6549
+  },
+  "refine.c2.weight": {
+    "shape": [
+      4,
+      4,
+      3,
+      3
+    ],
+    "offset": 6553
+  },
+  "refine.c2.bias": {
+    "shape": [
+      4
+    ],
+    "offset": 6697
+  },
+  "refine.a2.weight": {
+    "shape": [
+      4
+    ],
+    "offset": 6701
+  },
+  "refine.c3.weight": {
+    "shape": [
+      3,
+      4,
+      3,
+      3
+    ],
+    "offset": 6705
+  },
+  "refine.c3.bias": {
+    "shape": [
+      3
+    ],
+    "offset": 6813
+  }
+}

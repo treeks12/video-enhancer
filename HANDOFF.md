@@ -1,3 +1,9 @@
+# Continuation notice: 0.0.62 experimental
+
+Read `LEIA_PRIMEIRO-0.0.62.md`, `docs/NEURAL-INTEGRATION.md` and `release-evidence/validation-status.json` first. The previous 0.0.61 handoff is preserved below for provenance. The user explicitly requested implementing the neural path during this task; it is opt-in and remains unvalidated on actual GPU playback.
+
+---
+
 # HANDOFF — Video Enhancer (v0.0.61)
 
 > Documento de continuidade para outro agente/LLM assumir o trabalho.

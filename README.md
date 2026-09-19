@@ -1,3 +1,29 @@
+## 0.0.62 experimental: optional compact neural backend
+
+This snapshot adds a local WebGPU implementation of Framegen's compact t-factored
+inference graph, an explicit model installer, Balanced/High quality motion
+profiles, source-resolution RGB reconstruction, stale-frame cancellation, and
+classical fallback. It also fixes half-float subnormal corruption and the EASU
+comparison bypass. The existing upscalers remain in place.
+
+**Not GPU-homologated:** the build environment provided neither WebGPU nor WebGL2.
+Pretrained weights were not downloaded or evaluated here. No new quality or
+real-time-performance claim is made. See `LEIA_PRIMEIRO-0.0.62.md` and
+`release-evidence/validation-status.json` for exact scope, setup and limitations.
+
+Weights are optional data, installed on explicit consent; their noncommercial
+license is separate from the MIT runtime attribution. No remote executable code
+is fetched. This is a new dense runtime, not Framegen's tuned/sparse implementation.
+
+Run `node test/run.cjs`. Then serve the repository locally and run
+`test/neural-conformance.html` on a WebGPU-enabled browser **before** promotion.
+Fixtures are untrained mathematical references, not quality benchmarks.
+Build unsigned packages with `python tools/package.py`.
+
+---
+
+The sections below describe the preceding 0.0.61 and earlier implementation.
+
 # Video Enhancer
 
 [Website](https://treeks12.github.io/video-enhancer/) · [Releases](https://github.com/treeks12/video-enhancer/releases)

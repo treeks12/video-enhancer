@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),{model}=require('./fixtures.cjs');
+require('../fi-neural-runtime.js');let data={};
+global.chrome={storage:{local:{async set(v){Object.assign(data,v)},async get(k){return {[k]:data[k]}}}},runtime:{getURL:p=>'chrome-extension://test/'+p}};
+const M=require('../neural-model.js');
+(async()=>{const fixture=model();await M.store(fixture.manifest,fixture.binary);const loaded=await M.load();assert.deepEqual(Buffer.from(loaded.binary),Buffer.from(fixture.binary));assert.match(loaded.sha256,/^[a-f0-9]{64}$/);assert.ok(data.fiNeuralRevision>0);
+const stored=structuredClone(data);data[M.KEY].base64='AAAA';await assert.rejects(()=>M.load());data=structuredClone(stored);data[M.KEY].manifest['film.0.bias'].offset=-1;await assert.rejects(()=>M.load());
+await assert.rejects(()=>M.fetchBounded('https://evil.example/code.js',100));
+let cancelled=false;global.fetch=async()=>({ok:true,headers:{get:()=>null},body:{getReader(){let read=0;return {async read(){return read++?{done:true}:{done:false,value:new Uint8Array(101)}},async cancel(){cancelled=true;}}}}});
+await assert.rejects(()=>M.fetchBounded(M.BASE+'rt_v7s.bin',100));assert.ok(cancelled);console.log('PASS: atomic model storage, binary checksum, schema rejection, download origin and streaming byte limits');
+})().catch(e=>{console.error(e);process.exitCode=1;});

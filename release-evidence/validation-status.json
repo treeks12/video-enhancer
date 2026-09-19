@@ -1,0 +1,20 @@
+{
+  "base": "supplied 0.0.61 ZIP",
+  "version": "0.0.62 experimental",
+  "nodeSuite": "passed",
+  "halfFinitePatterns": 63488,
+  "numpyFloat32OracleCases": 100000,
+  "cpuIndependentGraphFixtures": 10,
+  "browserUiTest": "passed with synthetic state",
+  "webgpuAvailableInBuildEnvironment": false,
+  "webgl2AvailableInBuildEnvironment": false,
+  "pretrainedWeightsDownloadedInBuildEnvironment": false,
+  "gpuShaderCompilation": "not run",
+  "gpuVersusTorchParity": "not run; executable conformance harness included",
+  "pretrainedModelQualityEvaluation": "not run",
+  "actualVideoPlaybackIntegration": "not run",
+  "targetGpuPerformance": "not measured",
+  "storeSigned": false,
+  "publicRepoChanged": false,
+  "note": "Mock GPU tests validate host graph wiring and lifecycle, not shader arithmetic or image quality. Test fixture weights are untrained. Do not promote to production without real GPU conformance and A/B playback."
+}
