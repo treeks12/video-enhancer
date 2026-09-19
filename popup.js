@@ -11,6 +11,7 @@ const strengthValue = $("#strengthValue");
 const outline = $("#outline");
 const compare = $("#compare");
 const fiInfra = $("#fiInfra");
+const fiEngine = $("#fiEngine"), fiProfile = $("#fiProfile"), fiDebug = $("#fiDebug");
 const fiSceneCut = $("#fiSceneCut");
 const fiHalfLuma = $("#fiHalfLuma");
 const fiBlockMatch = $("#fiBlockMatch");
@@ -24,7 +25,7 @@ const qualityChips = $$("#qualityChips .chip");
 const interactionChips = $$("#interactionChips .chip");
 const presetChips = $$("#presetChips .chip");
 const allControls = [...modeChips, ...qualityChips, ...interactionChips, ...presetChips,
-  strength, outline, compare, fiInfra, fiSceneCut, fiHalfLuma, fiBlockMatch, toggle];
+  strength, outline, compare, fiInfra, fiEngine, fiProfile, fiDebug, fiSceneCut, fiHalfLuma, fiBlockMatch, toggle];
 
 let tabId;
 let controlsLocked = false;
@@ -88,6 +89,17 @@ function renderInterpolation(state) {
     title = "Starting interpolation";
     status = "Preparing WebGPU motion estimation…";
   }
+  if (enabled && fi.fallbackReason) {
+    tone = "warn"; title = "Neural fallback: classical engine"; status = fi.fallbackReason;
+  } else if (enabled && fi.actualEngine === "neural") {
+    tone = number(fi.midPerSec) > 0 ? "ok" : "warn";
+    title = number(fi.midPerSec) > 0 ? "Compact neural active" : "Neural: preparing or missing slots";
+    status = fi.explain || "Local neural reconstruction with source-resolution synthesis.";
+  }
+  fiEngine.value = state.settings.fiEngine || "classic";
+  fiProfile.value = state.settings.fiProfile || "balanced";
+  fiDebug.value = String(state.settings.fiDebug || 0);
+  fiDebug.disabled = fiEngine.value !== "neural";
   $("#fiStatus").dataset.tone = tone;
   $("#fiStatusTitle").textContent = title;
   $("#fiStatusDetail").textContent = status;
@@ -96,7 +108,9 @@ function renderInterpolation(state) {
   $("#fiMethod").textContent = enabled ? (fi.backend || fi.method || "Starting") : "Off";
   $("#fiConfidence").textContent = enabled && fi.confidence != null ? `${Math.round(number(fi.confidence) * 100)}%` : "—";
   $("#fiHold").textContent = enabled ? `${number(fi.sceneCutHold)} · ${fi.hasPair ? "ready" : "buffering"}` : "—";
-  $("#fiSample").textContent = fi.sample || "—";
+  const neural = fi.neural;
+  $("#fiSample").textContent = neural?.modelSize ? `${neural.modelSize.width}×${neural.modelSize.height} model` : (fi.sample || "—");
+  $("#fiNeuralStats").textContent = neural ? `${fixed(neural.p95)} ms · ${neural.completed} / ${neural.late}` : "n/a";
   $("#fiRates").textContent = enabled ? `${fixed(fi.realPerSec,0)} / ${fixed(fi.midPerSec,0)} per s` : "—";
 }
 
@@ -123,7 +137,7 @@ function render(state) {
   outline.checked = settings.outline === true; compare.checked = settings.compare === true;
   fiSceneCut.checked = settings.fiSceneCut !== false; fiHalfLuma.checked = settings.fiHalfLuma !== false;
   fiBlockMatch.checked = settings.fiBlockMatch !== false; fiFallback.checked = true;
-  fiSceneCut.disabled = !settings.fiInfra; fiHalfLuma.disabled = !settings.fiInfra; fiBlockMatch.disabled = !settings.fiInfra; fiFallback.disabled = true;
+  fiSceneCut.disabled = !settings.fiInfra; fiHalfLuma.disabled = !settings.fiInfra || settings.fiEngine === "neural"; fiBlockMatch.disabled = !settings.fiInfra; fiFallback.disabled = true;
   toggle.disabled = settings.mode === "off" || !state.hasVideo || state.status !== "ok";
   toggle.textContent = state.visible ? "Hide overlay" : "Show overlay";
   renderInterpolation(state);
@@ -178,6 +192,8 @@ fiInfra.addEventListener("change",()=>{
   if (enabled && currentState?.settings?.mode === "off") patch.mode = "native";
   updateSettings(patch).catch(unavailable);
 });
+for (const input of [fiEngine,fiProfile,fiDebug]) input.addEventListener("change",()=>updateSettings({[input.id]:input.id==="fiDebug"?Number(input.value):input.value}).catch(unavailable));
+$("#modelSetup").addEventListener("click",()=>ext.runtime.openOptionsPage());
 for (const input of [fiSceneCut,fiHalfLuma,fiBlockMatch]) input.addEventListener("change",()=>updateSettings({[input.id]:input.checked}).catch(unavailable));
 toggle.addEventListener("click",()=>send("fv-toggle").then(render).catch(unavailable));
 reload.addEventListener("click",async()=>{await ext.tabs.reload(tabId);window.close()});

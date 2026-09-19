@@ -2,10 +2,12 @@
   "manifest_version": 3,
   "minimum_chrome_version": "99",
   "name": "Video Enhancer",
-  "version": "0.0.61",
+  "version": "0.0.62",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage"
+  ],
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -26,16 +28,39 @@
     {
       "resources": [
         "third_party/ravu-lite/ravu-lite-lut3.bin",
-        "third_party/ravu-lite/ravu-lite-webgl2.js"
+        "third_party/ravu-lite/ravu-lite-webgl2.js",
+        "models/rt_v7s.json",
+        "models/rt_v7s.bin"
       ],
-      "matches": ["http://*/*", "https://*/*"]
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
     }
   ],
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["fi-core.js", "fi-webgpu.js", "content.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "fi-quality.js",
+        "fi-core.js",
+        "fi-webgpu.js",
+        "fi-neural-runtime.js",
+        "neural-model.js",
+        "fi-neural.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
+  ],
+  "options_ui": {
+    "page": "models.html",
+    "open_in_tab": true
+  },
+  "optional_host_permissions": [
+    "https://cdn.jsdelivr.net/*"
   ]
 }

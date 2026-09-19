@@ -56,6 +56,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   interaction: "smooth",
   // Frame interpolation (A/B toggles). Defaults: infra off; sub-options ready.
   fiInfra: false,
+  fiEngine: "classic",
+  fiProfile: "balanced",
+  fiDebug: 0,
+  fiNeuralRevision: 0,
   fiSceneCut: true,
   fiHalfLuma: true,
   fiBlockMatch: true,
@@ -88,6 +92,10 @@ function normalizeSettings(value = {}) {
       ? value.interaction
       : DEFAULT_SETTINGS.interaction,
     ...fi,
+    fiEngine: value.fiEngine === "neural" ? "neural" : "classic",
+    fiProfile: value.fiProfile === "quality" ? "quality" : "balanced",
+    fiDebug: [0, 1, 2, 3, 4].includes(Number(value.fiDebug)) ? Number(value.fiDebug) : 0,
+    fiNeuralRevision: Number.isSafeInteger(value.fiNeuralRevision) ? value.fiNeuralRevision : 0,
   };
 }
 
@@ -470,6 +478,10 @@ let fiLastRealCpuMs = 0;
 let fiMotionRetryAt = 0;
 let fiGpuEngine = null;
 let fiGpuInit = null;
+let fiGpuGeneration = 0;
+let fiNeuralFailure = "";
+let fiNeuralResult = null, fiNeuralTarget = null;
+let fiPairAnchorTime = 0, fiDisplayReference = 0;
 let fiGpuState = "idle";
 let fiGpuError = "";
 let fiGpuBusy = false;
@@ -818,7 +830,7 @@ function fiShouldPresentMid() {
     fiSkipReason = "Uncertain scene or motion — keeping the real cadence without duplicating the pipeline.";
     return false;
   }
-  if (!["block", "webgpu"].includes(fiMethod)) return false;
+  if (!["block", "webgpu", "neural"].includes(fiMethod)) return false;
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
   const budget = fiMidBudgetMs(lastVideoFrameDurationMs, fps);
   if (fiLastRealCpuMs > budget) {
@@ -975,6 +987,8 @@ function cancelFiMid() {
 function resetFiPairState(preserveBudget = false) {
   fiPairDiscontinuous = false;
   fiGpuReadySerial = -1;
+  fiNeuralResult = fiNeuralTarget = null;
+  fiGpuEngine?.reset?.();
   cancelFiMid();
   fiHasPrev = false;
   fiHasCurr = false;
@@ -1045,15 +1059,25 @@ function warmFiPrograms() {
 function fiWarmGpu() {
   if (!settings.fiInfra || fiGpuInit || fiGpuState === "unavailable") return;
   if (fiGpuEngine && !fiGpuEngine.lost) return;
+  const generation = fiGpuGeneration;
+  const requested = settings.fiEngine;
+  const profile = settings.fiProfile;
   fiGpuState = "initializing";
   fiMeasureDisplay();
-  fiGpuInit = Promise.resolve().then(() => {
+  fiGpuInit = Promise.resolve().then(async () => {
+    if (requested === "neural" && !fiNeuralFailure) {
+      try { return await FiNeural.create({ profile }); }
+      catch (error) { if (generation === fiGpuGeneration) fiNeuralFailure = String(error.message || error); }
+    }
+    if (generation !== fiGpuGeneration) return null;
     if (typeof FiWebGpu === "undefined") throw new Error("WebGPU module unavailable. Reload the extension and page.");
-    return FiWebGpu.create();
+    const engine = await FiWebGpu.create();
+    engine.kind = "classic";
+    return engine;
   }).then(engine => {
-    if (!settings.fiInfra || settings.mode === "off" || stopped) {
+    if (!engine) return;
+    if (generation !== fiGpuGeneration || !settings.fiInfra || settings.mode === "off" || stopped) {
       engine.destroy();
-      fiGpuState = "idle";
       return;
     }
     fiGpuEngine = engine;
@@ -1061,26 +1085,84 @@ function fiWarmGpu() {
     fiGpuError = "";
     engine.whenLost.then(error => {
       if (fiGpuEngine !== engine) return;
+      if (engine.kind === "neural") { fiUseClassicFallback(engine, error); return; }
       fiGpuState = "unavailable";
       fiGpuError = String(error.message || error);
       fiMethod = "skip";
       fiGpuReadySerial = -1;
       fiSkipReason = "WebGPU unavailable; showing original frames. " + fiGpuError;
-      // Keep the presentation clock; the next anchor advances at its normal time.
     });
   }).catch(error => {
+    if (generation !== fiGpuGeneration) return;
     fiGpuState = "unavailable";
     fiGpuError = String(error.message || error);
-  }).finally(() => { fiGpuInit = null; });
+  }).finally(() => { if (generation === fiGpuGeneration) fiGpuInit = null; });
 }
 
-function fiReleaseGpu() {
+function fiUseClassicFallback(engine, error) {
+  if (fiGpuEngine !== engine) return;
+  fiNeuralFailure = String(error?.message || error || "Neural processing failed");
+  fiReleaseGpu(false);
+  fiSkipReason = "Neural unavailable; switching to classical WebGPU. " + fiNeuralFailure;
+  fiWarmGpu();
+}
+
+function fiReleaseGpu(clearNeuralFailure = true) {
+  fiGpuGeneration++;
+  fiGpuInit = null;
   if (fiDisplayRaf !== null) cancelAnimationFrame(fiDisplayRaf);
   fiDisplayRaf = null;
+  cancelFiMid();
+  fiNeuralResult = fiNeuralTarget = null;
+  fiGpuReadySerial = -1;
   const engine = fiGpuEngine;
   fiGpuEngine = null;
   fiGpuState = "idle";
+  fiGpuBusy = false;
+  fiMethod = "skip";
+  if (clearNeuralFailure) fiNeuralFailure = "";
   if (engine) engine.destroy();
+}
+
+function fiRequestNeuralPair() {
+  const engine = fiGpuEngine, serial = fiPairSerial, video = currentVideo;
+  fiNeuralResult = fiNeuralTarget = null;
+  const duration = lastVideoFrameDurationMs || 1000 / ((metricReport.videoFps || 30) * (video.playbackRate || 1));
+  const slot = FiQuality.neuralSlot(fiPairAnchorTime, duration, fiDisplayPeriod,
+    fiDisplayReference || fiPairAnchorTime);
+  const hasLumaPair = fiPrevLuma && fiCurrLuma && fiPrevLuma.length === fiCurrLuma.length;
+  const cut = Boolean(settings.fiSceneCut && hasLumaPair &&
+    fiIsSceneCut(fiSceneCutScore(fiPrevLuma, fiCurrLuma)) &&
+    fiSceneDistributionChange(fiPrevLuma, fiCurrLuma) > .35);
+  const skip = !fiHasPrev || !hasLumaPair || fiPairDiscontinuous || cut || !slot || !settings.fiBlockMatch;
+  const valid = () => fiGpuEngine === engine && serial === fiPairSerial && video === currentVideo &&
+    settings.fiInfra && canRender() && slot && performance.now() <= slot.expires;
+  let work;
+  try {
+    // submit snapshots the video synchronously, even when a pair will be skipped.
+    work = engine.submit(video, { serial, phase: slot?.phase || .5, skip, valid, debug: settings.fiDebug });
+  } catch (error) { fiUseClassicFallback(engine, error); return false; }
+  if (!work) {
+    fiSkipReason = cut ? "Scene cut; keeping original anchors." : skip ?
+      "No safe extra-frame slot; keeping original anchors." : "Neural buffering or busy; keeping original anchors.";
+    return false;
+  }
+  fiNeuralTarget = slot;
+  fiGpuBusy = true;
+  fiMethod = "pending";
+  fiSkipReason = "Reconstructing with the compact neural network.";
+  work.then(result => {
+    if (fiGpuEngine !== engine || serial !== fiPairSerial || video !== currentVideo) return;
+    fiGpuElapsedMs = engine.stats.ms;
+    if (!result || !valid()) { fiMethod = "skip"; fiSkipReason = "Neural frame missed its slot; preserving source cadence."; return; }
+    fiNeuralResult = result;
+    fiGpuReadySerial = serial;
+    fiMethod = "neural";
+    fiSkipReason = "";
+  }).catch(error => fiUseClassicFallback(engine, error)).finally(() => {
+    if (fiGpuEngine === engine) fiGpuBusy = false;
+  });
+  return true;
 }
 
 function fiMeasureDisplay() {
@@ -1092,6 +1174,7 @@ function fiMeasureDisplay() {
     if (!settings.fiInfra || document.hidden || stopped) return;
     if (previous !== null && now - previous > 2 && now - previous < 80) intervals.push(now - previous);
     previous = now;
+    fiDisplayReference = now;
     if (intervals.length >= 12) {
       intervals.sort((a, b) => a - b);
       fiDisplayPeriod = intervals[Math.floor(intervals.length / 2)];
@@ -1111,6 +1194,7 @@ function fiRequestGpuPair() {
     fiSkipReason = fiGpuError || "Preparing WebGPU optical flow; showing original frames.";
     return false;
   }
+  if (fiGpuEngine.kind === "neural") return fiRequestNeuralPair();
   if (!settings.fiBlockMatch) {
     fiSkipReason = "Motion estimation disabled; showing original frames.";
     return false;
@@ -1185,7 +1269,7 @@ function fiRequestGpuPair() {
       fiSkipReason = "WebGPU failed; showing original frames. " + fiGpuError;
     }
   }).finally(() => {
-    fiGpuBusy = false;
+    if (fiGpuEngine === engine) fiGpuBusy = false;
   });
   return true;
 }
@@ -1241,8 +1325,10 @@ function fiEnsureFrameTextures(w, h) {
 
 function fiLumaSampleSize(srcW, srcH, halfLuma) {
   // GPU optical flow uses a larger luma image; transfers remain bounded.
-  const maxW = (halfLuma ? 320 : 480) * fiGpuSampleScale;
-  const maxH = (halfLuma ? 180 : 270) * fiGpuSampleScale;
+  const p = FiQuality.profile(settings.fiProfile);
+  const neural = fiGpuEngine?.kind === "neural";
+  const maxW = neural ? 160 : (halfLuma ? p.motionW : p.motionW * 1.25) * fiGpuSampleScale;
+  const maxH = neural ? 90 : (halfLuma ? p.motionH : p.motionH * 1.25) * fiGpuSampleScale;
   const scale = Math.min(1, maxW / srcW, maxH / srcH);
   let tw = Math.max(16, Math.round(srcW * scale));
   let th = Math.max(16, Math.round(srcH * scale));
@@ -1415,6 +1501,19 @@ function fiComputeDecision() {
 }
 
 function fiRenderMidToOut(phase) {
+  if (fiMethod === "neural") {
+    const result = fiNeuralResult;
+    if (!result || result.serial !== fiPairSerial || fiGpuReadySerial !== fiPairSerial ||
+        !fiNeuralTarget || performance.now() > fiNeuralTarget.expires ||
+        !fiEnsureOut(result.width, result.height)) return false;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, fiOutTexture);
+    // Canvas-to-texture interop, not a CPU pixel-array readback. The browser may
+    // copy between GPU APIs; this is not a claim of universal zero-copy.
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, result.canvas);
+    return true;
+  }
   if (fiMethod !== "webgpu" && fiMethod !== "block") return false;
   if (fiMethod === "webgpu" && fiGpuReadySerial !== fiPairSerial) return false;
   if (!fiLastMatch || !fiLastBackwardMatch || !fiForwardMvTexture || !fiBackwardMvTexture) return false;
@@ -1496,6 +1595,18 @@ function fiScheduleMidFrame(pairSerial, metadata) {
     fiMidRaf = null;
     if (!canRender() || !settings.fiInfra) return;
     if (pairSerial !== fiPairSerial || !fiHasCurr) return;
+    fiDisplayReference = now;
+    if (fiGpuEngine?.kind === "neural") {
+      const slot = fiNeuralTarget;
+      if (!slot || now > slot.expires) { fiSkipReason = "Neural presentation slot expired; keeping the anchor."; return; }
+      if (now < slot.time - .5 || fiMethod === "pending") { fiMidRaf = requestAnimationFrame(present); return; }
+      if (fiMethod !== "neural" || fiGpuReadySerial !== pairSerial || !fiNeuralResult) return;
+      // Display precisely the phase that was inferred; do not relabel a cached
+      // midpoint as a later phase to inflate the output frame rate.
+      try { draw({ fiMid: true, fiPhase: slot.phase }); }
+      catch (error) { fiUseClassicFallback(fiGpuEngine, error); }
+      return;
+    }
     const phase = typeof fiPresentationPhase === "function"
       ? fiPresentationPhase(now, anchorTime, duration)
       : Math.max(0, Math.min(1, (now - anchorTime) / duration));
@@ -2046,6 +2157,8 @@ function draw(options = {}) {
     if (settings.fiInfra) {
       let gpuPairPending = false;
       try {
+        const expected = Number(options.videoMetadata?.expectedDisplayTime);
+        fiPairAnchorTime = Number.isFinite(expected) ? expected : performance.now();
         gpuPairPending = fiAfterVideoUpload(currentVideo);
       } catch (err) {
         log("FI pair update failed:", err);
@@ -2196,6 +2309,21 @@ function draw(options = {}) {
         ? "RCAS (RAVU skipped: economy profile + output ≤ source)"
         : "RCAS";
     }
+  }
+  if (settings.compare) {
+    // Bypass the entire spatial chain on the left. For FI mids retain the
+    // matching delayed source anchor, not the live video on a different clock.
+    const original = presentation === "mid" && fiHasPrev ? fiPrevTexture : sourceTex;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, 0, Math.ceil(canvas.width / 2), canvas.height);
+    gl.useProgram(program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, original);
+    setDirectUniforms(1 / srcW, 1 / srcH, 0, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.disable(gl.SCISSOR_TEST);
   }
   activePipeline += fiTag;
   if (gpuQuery) {
@@ -2558,7 +2686,9 @@ function hideCanvas() {
 function applySettings(value) {
   const previous = settings;
   settings = normalizeSettings(value);
-  if (!settings.fiInfra && previous.fiInfra) fiReleaseGpu();
+  const engineChanged = settings.fiEngine !== previous.fiEngine ||
+    settings.fiProfile !== previous.fiProfile || settings.fiNeuralRevision !== previous.fiNeuralRevision;
+  if ((!settings.fiInfra && previous.fiInfra) || engineChanged) fiReleaseGpu();
   const modeChanged = settings.mode !== previous.mode;
   const qualityChanged = settings.quality !== previous.quality;
   const visualChanged = settings.strength !== previous.strength ||
@@ -2567,6 +2697,7 @@ function applySettings(value) {
   const compareChanged = settings.compare !== previous.compare;
   const interactionChanged = settings.interaction !== previous.interaction;
   const fiChanged =
+    engineChanged || settings.fiDebug !== previous.fiDebug ||
     settings.fiInfra !== previous.fiInfra ||
     settings.fiSceneCut !== previous.fiSceneCut ||
     settings.fiHalfLuma !== previous.fiHalfLuma ||
@@ -2672,11 +2803,16 @@ function snapshot() {
     metrics: { ...metricReport, gpuSupported: Boolean(timerExt) },
     fi: {
       presentationDelayMs: fiLatencyActive ? lastVideoFrameDurationMs : 0,
-      backend: fiGpuState === "ready" ? "WebGPU optical flow" : fiGpuState,
+      backend: fiGpuState === "ready" ? (fiGpuEngine?.kind === "neural" ? "WebGPU compact neural" : "WebGPU optical flow") : fiGpuState,
+      requestedEngine: settings.fiEngine,
+      actualEngine: fiGpuEngine?.kind || "none",
+      fallbackReason: fiNeuralFailure,
+      profile: settings.fiProfile,
+      neural: fiGpuEngine?.kind === "neural" ? { ...fiGpuEngine.stats, modelSize: fiGpuEngine.modelSize, debug: settings.fiDebug } : null,
       computeMs: fiGpuElapsedMs,
       backendError: fiGpuError,
       method: fiMethod,
-      confidence: fiConfidence,
+      confidence: fiGpuEngine?.kind === "neural" ? null : fiConfidence,
       videoFps: metricReport.videoFps || 0,
       sceneCutHold: fiSceneCutHold,
       hasPair: fiHasPrev && fiHasCurr,
@@ -2847,7 +2983,7 @@ function selfCheck() {
   }
   const fiSample = fiLumaSampleSize(1920, 1080, true);
   const fiDetailedSample = fiLumaSampleSize(1920, 1080, false);
-  if (fiSample.width > 320 || fiSample.height > 180) {
+  if (fiSample.width > FiQuality.profile(settings.fiProfile).motionW || fiSample.height > FiQuality.profile(settings.fiProfile).motionH) {
     throw new Error("selfCheck: amostra FI grande demais");
   }
   if (fiDetailedSample.width <= fiSample.width || fiDetailedSample.height <= fiSample.height) {

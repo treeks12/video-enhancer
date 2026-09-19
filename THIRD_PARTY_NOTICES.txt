@@ -41,3 +41,13 @@ the mpv hook interface was ported to WebGL2, RGB input is converted to
 luminance, and the original 2x selection pass is fused with arbitrary-ratio
 RGB recomposition. The unmodified trained LUT is distributed as
 third_party/ravu-lite/ravu-lite-lut3.bin.
+
+Compact neural inference (optional, 0.0.62)
+Graph/layout and selected WGSL kernel equations derived from Framegen v1.4.7,
+commit 83a3e338cb3b9391b05c4d85a5fd8534a8aafa32, copyright (c) 2026 Monzik Allen.
+Code attribution and MIT license: third_party/framegen/LICENSE.
+This extension uses a new dense implementation; it does not claim upstream's
+hardware-tuned performance. No pretrained weights were trained by this project.
+Optional rt_v7s weights are NOT covered by MIT: see
+third_party/framegen/WEIGHTS_LICENSE.md (personal/noncommercial research only).
+Weights are installed only on explicit user action or by an offline builder.

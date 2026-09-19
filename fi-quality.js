@@ -51,7 +51,7 @@
     const {gridW: w,gridH: h,block} = match, n = w*h;
     const mvs = new Float32Array(match.mvs), conf = new Float32Array(match.confidences || n);
     if (!match.confidences) conf.fill(match.confidence || 0);
-    const guide = (i) => luma?.[Math.min(height-1, Math.floor(i/w*block+block*.5))*width + Math.min(width-1, Math.floor(i%w*block+block*.5))] || 0;
+    const guide = (i) => luma?.[Math.min(height-1, Math.floor(Math.floor(i/w)*block+block*.5))*width + Math.min(width-1, Math.floor(i%w*block+block*.5))] || 0;
     let invalid = 0, replaced = 0;
     const ix = new Int32Array(9), weights = new Float32Array(9);
     for (let i=0;i<n;i++) {
