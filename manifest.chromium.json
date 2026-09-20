@@ -67,8 +67,7 @@
     "open_in_tab": true
   },
   "optional_host_permissions": [
-    "https://cdn.jsdelivr.net/*",
-    "https://raw.githubusercontent.com/*"
+    "https://cdn.jsdelivr.net/*"
   ],
   "background": {
     "service_worker": "neural/background.js"

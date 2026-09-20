@@ -4,8 +4,10 @@
   const MODEL = Object.freeze({
     id: 'ifrnet-s-gopro-ncnn-v1', name: 'IFRNet-S (GoPro)',
     bytes: 5921992, gitBlob: 'cae4a9270b508eb0fc51c9570b3fa0c8d7d3c773',
-    url: 'https://raw.githubusercontent.com/nihui/ifrnet-ncnn-vulkan/7e54b1caa8c9f94a052a7148a56a2f57b685609e/models/IFRNet_S_GoPro/ifrnet.bin',
-    origin: 'https://raw.githubusercontent.com/*',
+    // jsDelivr's GitHub mirror of the pinned revision: byte-identical to the
+    // raw.githubusercontent blob (git SHA-1 cae4a927…), still verified at install.
+    url: 'https://cdn.jsdelivr.net/gh/nihui/ifrnet-ncnn-vulkan@7e54b1caa8c9f94a052a7148a56a2f57b685609e/models/IFRNet_S_GoPro/ifrnet.bin',
+    origin: 'https://cdn.jsdelivr.net/*',
     upstream: 'https://github.com/nihui/ifrnet-ncnn-vulkan/tree/master/models/IFRNet_S_GoPro',
   });
   const ENCODER = [[3,24],[24,24],[24,36],[36,36],[36,54],[54,54],[54,72],[72,72]];

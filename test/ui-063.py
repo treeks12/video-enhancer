@@ -13,7 +13,7 @@ with sync_playwright() as p:
   page.evaluate('''()=>{
     window.events=[];window.allowed=false;
     window.mockState={status:'ok',visible:true,hasVideo:true,pipeline:'RAVU + Analytic (fixture)',settings:{mode:'ravu',strength:35,quality:'high',interaction:'smooth',fiInfra:true,fiEngine:'analytic',fiProfile:'balanced',fiDebug:0},metrics:{videoFps:30,fps:30,midFps:0,renderScale:1},fi:{backend:'Analytic Flow (WebGL2; no neural weights)',actualEngine:'analytic',hasPair:true,explain:'UI test fixture, not a hardware measurement',computeMs:0,midPerSec:0,analytic:{completed:0,late:0,p95:0,coverage:0},sample:'320 × 180 dense flow'}};
-    window.chrome={runtime:{getManifest:()=>({version:'0.0.63'}),openOptionsPage:async()=>events.push('modelSetup'),sendMessage:async m=>{events.push(m);return {ok:true};}},permissions:{request:async()=>allowed},tabs:{query:async()=>[{id:1}],sendMessage:async(id,m)=>{if(m.settings)Object.assign(mockState.settings,m.settings);return structuredClone(mockState);},reload:async()=>{}},storage:{local:{set:async m=>events.push(m)}}};
+    window.chrome={runtime:{getManifest:()=>({version:'0.0.63'}),openOptionsPage:async()=>events.push('modelSetup'),sendMessage:async m=>{events.push(m);return {ok:true};}},permissions:{request:async()=>allowed},tabs:{query:async()=>[{id:1}],sendMessage:async(id,m)=>{if(m.settings)Object.assign(mockState.settings,m.settings);return structuredClone(mockState);},reload:async()=>{}},storage:{local:{set:async m=>events.push(m),get:async()=>({})}}};
   }''')
   for name in ['build-flavor.js','popup.js']:page.add_script_tag(content=z.read(name).decode())
   page.wait_for_timeout(50)
@@ -26,9 +26,20 @@ with sync_playwright() as p:
    assert page.locator('#modelSetup').count()==0 and page.locator('#ifrSetup').count()==0
   else:
    assert page.locator('#fiEngine option').count()==4
+   # Install/remove moved to models.html; the popup only warns about missing weights.
+   assert page.locator('#ifrDownload').count()==0 and page.locator('#ifrImport').count()==0
    page.click('#modelSetup');assert 'modelSetup'in page.evaluate('events')
-   page.click('#ifrDownload');assert 'permission not granted' in page.locator('#ifrStatus').inner_text()
-   page.evaluate('allowed=true');page.click('#ifrDownload');assert any(isinstance(e,dict)and e.get('type')=='ve-model-download'for e in page.evaluate('events'))
+   warn=page.locator('#modelWarn');page.wait_for_timeout(150)
+   page.select_option('#fiEngine','ifrnet');page.wait_for_timeout(60)
+   assert warn.is_visible() and 'not installed' in warn.inner_text().lower()
+   page.evaluate("chrome.runtime.sendMessage=async m=>({ok:true,installed:true})")
+   page.select_option('#fiEngine','analytic');page.select_option('#fiEngine','ifrnet');page.wait_for_timeout(60)
+   assert warn.is_hidden()
+   page.select_option('#fiEngine','neural');page.wait_for_timeout(60)
+   assert warn.is_visible() and 'not installed' in warn.inner_text().lower()
+   page.evaluate("chrome.storage.local.get=async()=>({fvNeuralModelV1:{id:'framegen-1.4.0-v7-small'}})")
+   page.select_option('#fiEngine','analytic');page.select_option('#fiEngine','neural');page.wait_for_timeout(60)
+   assert warn.is_hidden()
    page.select_option('#fiEngine','ifrnet');assert page.evaluate('mockState.settings.fiEngine')=='ifrnet'
    page.select_option('#fiEngine','neural');assert page.evaluate('mockState.settings.fiEngine')=='neural'
    page.select_option('#fiEngine','analytic')

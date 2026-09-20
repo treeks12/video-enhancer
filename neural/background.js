@@ -37,11 +37,12 @@ async function download(){
   if(at!==MODEL.bytes)throw new Error('Incomplete model download.');return await install(data);
  }finally{clearTimeout(timeout);downloadController=null;}
 }
-function isAdmin(sender){return sender.id===api.runtime.id&&typeof sender.url==='string'&&sender.url.split('?')[0]===api.runtime.getURL('popup.html');}
+// The options page is the single installation UI; the popup only reports status.
+function isAdmin(sender){return sender.id===api.runtime.id&&typeof sender.url==='string'&&['popup.html','models.html'].some(p=>sender.url.split('?')[0]===api.runtime.getURL(p));}
 async function handle(message,sender){
  if(sender.id!==api.runtime.id)throw new Error('Untrusted model request.');
  if(message.type==='ve-model-status'){
-  const record=cached||await dbGet();return {...progress,installed:!!record,id:MODEL.id,bytes:MODEL.bytes};
+  const record=cached||await dbGet();return {...progress,installed:!!record,id:MODEL.id,bytes:MODEL.bytes,installedAt:record?.installedAt||null,blob:record?.blob||MODEL.gitBlob};
  }
  if(message.type==='ve-model-chunk'){
   const index=message.index;if(!Number.isInteger(index)||index<0||index>=Math.ceil(MODEL.bytes/CHUNK))throw new Error('Invalid model chunk.');

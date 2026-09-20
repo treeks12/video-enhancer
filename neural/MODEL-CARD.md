@@ -20,9 +20,10 @@ Preprocessing and checkpoint layout reference: https://github.com/nihui/ifrnet-n
 - The two encoder branches must be identical; the loader checks this invariant.
 
 The 0.0.62 packages contain runtime code and attribution, **not the binary weights**.
-Use the popup's explicit Download model or Import .bin operation. Downloads request
-optional access only to raw.githubusercontent.com, omit credentials and referrer, and
-use the pinned revision URL. No remote executable code, model URL supplied by a page,
+Use the model setup page's explicit Download model or Import .bin operation. Downloads request
+optional access only to cdn.jsdelivr.net (GitHub mirror of the pinned revision,
+byte-identical blob), omit credentials and referrer, and verify the pinned
+revision hash before installation. No remote executable code, model URL supplied by a page,
 video upload, telemetry, API key, native helper, Python or ONNX runtime is used at playback.
 Weights are verified before IndexedDB storage and again in the content-side loader.
 A failed verification leaves the prior installed model intact.

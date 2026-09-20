@@ -223,20 +223,24 @@ setInterval(()=>{if(tabId!==undefined&&!controlsLocked&&!pendingUpdates&&!draggi
 
 /* PERSONAL_ONLY_BEGIN */
 // Optional neural installation is absent from store bundles, not merely hidden.
+// Install/remove flows live in models.html (Model setup); the popup only warns.
 if(globalThis.VE_BUILD?.personal !== false){
- const setModelStatus=text=>{$("#ifrStatus").textContent=text;};
- const modelCall=async(type,extra={})=>{const v=await ext.runtime.sendMessage({type,...extra});if(!v?.ok)throw new Error(v?.error||"Model service unavailable");return v;};
- $("#ifrDownload")?.addEventListener("click",async()=>{try{
-   const granted=await ext.permissions.request({origins:["https://raw.githubusercontent.com/*"]});
-   if(!granted)throw new Error("Download permission not granted. Import remains available.");
-   setModelStatus("Downloading and verifying IFRNet-S…");await modelCall("ve-model-download");setModelStatus("IFRNet-S installed locally.");
- }catch(e){setModelStatus(e.message);}});
- $("#ifrImport")?.addEventListener("change",async event=>{try{
-   const f=event.target.files?.[0];if(!f)return;if(f.size!==5921992)throw new Error("Use the exact IFRNet-S GoPro .bin (5,921,992 bytes).");
-   const b=new Uint8Array(await f.arrayBuffer());let text="";for(let i=0;i<b.length;i+=16384)text+=String.fromCharCode(...b.subarray(i,i+16384));
-   await modelCall("ve-model-import",{data:btoa(text)});setModelStatus("IFRNet-S imported and verified.");
- }catch(e){setModelStatus(e.message);}finally{event.target.value="";}});
- $("#ifrRemove")?.addEventListener("click",async()=>{try{await modelCall("ve-model-remove");setModelStatus("IFRNet-S removed.");}catch(e){setModelStatus(e.message);}});
+ const modelInstalled={framegen:null,ifrnet:null};
+ function updateModelWarn(){
+  const warn=$("#modelWarn");if(!warn)return;
+  const engine=fiEngine.value;let text="";
+  if(engine==="neural"&&modelInstalled.framegen===false)text="Framegen weights are not installed — open Model setup to download them, or this engine falls back to classical motion.";
+  else if(engine==="ifrnet"&&modelInstalled.ifrnet===false)text="IFRNet-S weights are not installed — open Model setup to download them, or this engine falls back to classical motion.";
+  warn.hidden=!text;warn.textContent=text;
+ }
+ async function refreshModels(){
+  try{const v=await ext.runtime.sendMessage({type:"ve-model-status"});modelInstalled.ifrnet=v?.ok?!!v.installed:null;}catch{modelInstalled.ifrnet=null;}
+  // "fvNeuralModelV1" mirrors FiNeuralModel.KEY in neural-model.js.
+  try{const stored=await ext.storage.local.get("fvNeuralModelV1");modelInstalled.framegen=!!stored.fvNeuralModelV1;}catch{modelInstalled.framegen=null;}
+  updateModelWarn();
+ }
+ fiEngine.addEventListener("change",updateModelWarn);
+ refreshModels();setInterval(refreshModels,5000);
 }
 
 /* PERSONAL_ONLY_END */

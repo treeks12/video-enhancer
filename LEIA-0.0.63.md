@@ -30,7 +30,7 @@ Desative a versão antiga, extraia o ZIP da edição e do navegador desejados e 
 
 Comece com **Original**, **Frame interpolation** habilitado e **Analytic Flow**. Use **Balanced** antes de **High quality**. “Original” significa ausência de upscale espacial, não desligamento da interpolação. Depois reative o upscale preferido.
 
-Na edição pessoal, alterne Analytic Flow com o modelo que deu bom resultado. Confira **Motion method** e o aviso de fallback: selecionar uma IA não comprova que ela carregou. O botão **Save diagnostics** exporta um JSON local com método efetivo, tempos, cadência, resolução e suporte amostrado; não exporta frames e não envia o arquivo automaticamente.
+Na edição pessoal, alterne Analytic Flow com o modelo que deu bom resultado. Os dois modelos opcionais (Framegen e IFRNet-S) agora se instalam na mesma página: botão **Model setup** no popup. Ela mostra explicitamente o estado de cada um ("Not installed" em destaque quando faltam os pesos), e o próprio popup avisa em vermelho quando o motor selecionado não tem modelo instalado, antes de qualquer fallback. Os dois downloads usam somente cdn.jsdelivr.net (o IFRNet-S vem do espelho GitHub da revisão pinada, bytes idênticos ao blob original). Confira **Motion method** e o aviso de fallback: selecionar uma IA não comprova que ela carregou. O botão **Save diagnostics** exporta um JSON local com método efetivo, tempos, cadência, resolução e suporte amostrado; não exporta frames e não envia o arquivo automaticamente.
 
 O comparador 50/50 usa o anchor original atrasado à esquerda, não uma imagem original no mesmo instante inexistente da interpolação. Portanto ele é útil para comparação visual, mas não constitui ground truth temporal.
 
