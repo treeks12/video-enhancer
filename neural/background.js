@@ -45,7 +45,10 @@ function isAdmin(sender){return sender.id===api.runtime.id&&typeof sender.url===
 async function handle(message,sender){
  if(sender.id!==api.runtime.id)throw new Error('Untrusted model request.');
  if(message.type==='ve-model-status'){
-  const record=cached||await dbGet();return {...progress,installed:!!record,id:MODEL.id,bytes:MODEL.bytes,installedAt:record?.installedAt||null,blob:record?.blob||MODEL.gitBlob};
+  const record=cached||await dbGet();
+  let bundled=false;
+  try{const probe=await fetch(api.runtime.getURL('models/ifrnet.bin'),{method:'HEAD'});bundled=probe.ok;}catch{}
+  return {...progress,installed:!!record,id:MODEL.id,bytes:MODEL.bytes,installedAt:record?.installedAt||null,blob:record?.blob||MODEL.gitBlob,bundled};
  }
  if(message.type==='ve-model-chunk'){
   const index=message.index;if(!Number.isInteger(index)||index<0||index>=Math.ceil(MODEL.bytes/CHUNK))throw new Error('Invalid model chunk.');

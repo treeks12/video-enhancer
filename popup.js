@@ -234,9 +234,13 @@ if(globalThis.VE_BUILD?.personal !== false){
   warn.hidden=!text;warn.textContent=text;
  }
  async function refreshModels(){
-  try{const v=await ext.runtime.sendMessage({type:"ve-model-status"});modelInstalled.ifrnet=v?.ok?!!v.installed:null;}catch{modelInstalled.ifrnet=null;}
+  try{const v=await ext.runtime.sendMessage({type:"ve-model-status"});modelInstalled.ifrnet=v?.ok?!!(v.installed||v.bundled):null;}catch{modelInstalled.ifrnet=null;}
   // "fvNeuralModelV1" mirrors FiNeuralModel.KEY in neural-model.js.
-  try{const stored=await ext.storage.local.get("fvNeuralModelV1");modelInstalled.framegen=!!stored.fvNeuralModelV1;}catch{modelInstalled.framegen=null;}
+  try{
+   const stored=await ext.storage.local.get("fvNeuralModelV1");
+   modelInstalled.framegen=!!stored.fvNeuralModelV1;
+   if(!modelInstalled.framegen){const probe=await fetch(ext.runtime.getURL("models/rt_v7s.json"),{method:"HEAD"});modelInstalled.framegen=probe.ok;}
+  }catch{modelInstalled.framegen=null;}
   updateModelWarn();
  }
  fiEngine.addEventListener("change",updateModelWarn);

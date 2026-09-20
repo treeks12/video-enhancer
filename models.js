@@ -26,6 +26,8 @@ async function ifrShow(){ // IFRNet-S weights live in IndexedDB via the backgrou
  try{const v=await modelCall('ve-model-status');
   if(v.installed){message(ifrStatus,'Installed — the IFRNet-S engine is ready.');
    ifrDetails.textContent=`${v.id} · ${v.bytes} bytes\ngit blob ${v.blob}\ninstalled ${v.installedAt||'unknown date'}`;}
+  else if(v.bundled){message(ifrStatus,'Using bundled local weights (models/ifrnet.bin in the extension folder). No download needed.');
+   ifrDetails.textContent='Bundled file is hash-verified on every load.';}
   else{message(ifrStatus,'Not installed. The IFRNet-S engine falls back to classical motion until you install these weights.',true);ifrDetails.textContent='';}
  }catch(e){message(ifrStatus,e.message||String(e),true);ifrDetails.textContent='';}}
 async function refresh(){await Promise.all([show(),ifrShow()]);}
