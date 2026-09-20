@@ -1,49 +1,143 @@
 {
-  "extensionName": { "message": "Video Enhancer for Firefox" },
-  "extensionDescription": { "message": "Smoother video motion with WebGPU frame interpolation, plus optional FSR1, RAVU-lite and RCAS image enhancement." },
-  "statusChecking": { "message": "Checking…" },
-  "detailLoading": { "message": "Loading settings…" },
-  "effect": { "message": "Effect" },
-  "modeNative": { "message": "Native" },
-  "qualityBadge": { "message": "quality" },
-  "sharpness": { "message": "Sharpness (RCAS)" },
-  "sharpnessPresetsAria": { "message": "RCAS sharpness presets" },
-  "soft": { "message": "Soft" },
-  "medium": { "message": "Medium" },
-  "strong": { "message": "Strong" },
-  "quality": { "message": "Quality" },
-  "duringBrowsing": { "message": "While browsing" },
-  "smoothness": { "message": "Smoothness" },
-  "balance": { "message": "Balance" },
-  "fidelity": { "message": "Fidelity" },
-  "hideOverlay": { "message": "Hide overlay" },
-  "reloadPage": { "message": "Reload page" },
-  "advancedDiagnostics": { "message": "Advanced / Diagnostics" },
-  "testOutline": { "message": "Test outline" },
-  "compare5050": { "message": "50/50 comparison" },
-  "experimentalSmoothing": { "message": "Experimental smoothing" },
-  "fiIntro": { "message": "Lab: creates one midpoint per pair (up to 2×). Works with FSR1/RAVU, but RAVU can be expensive." },
-  "disabled": { "message": "Disabled" },
-  "fiInitialDetail": { "message": "The current result is subtle; treat this as experimental." },
-  "smoothingDetails": { "message": "Smoothing details (A/B)" },
-  "fiPieces": { "message": "Internal experiment controls. Change them only to isolate behavior." },
-  "cutScenes": { "message": "Cut on scene changes" },
-  "lightMotion": { "message": "Light motion sample (recommended)" },
-  "estimateMotion": { "message": "Estimate motion (WebGPU optical flow)" },
-  "unsafeFallback": { "message": "Uncertain motion keeps original frames" },
-  "health": { "message": "Health" },
-  "videoOutput": { "message": "Video / total output" },
-  "anchorsMids": { "message": "Anchors / FI midpoints" },
-  "internalScale": { "message": "Internal scale" },
-  "fiMethod": { "message": "FI method" },
-  "matchConfidence": { "message": "Match confidence" },
-  "cutHoldPair": { "message": "Cut hold / pair" },
-  "meSample": { "message": "ME sample" },
-  "overlayNotDrawn": { "message": "Overlay not drawn" },
-  "videoDropped": { "message": "Video frames dropped" },
-  "callbacksLate": { "message": "Late callbacks" },
-  "cpuAnchor": { "message": "CPU per anchor" },
-  "gpuEffect": { "message": "GPU upload + effect" },
-  "decode": { "message": "Decode" },
-  "hintInitial": { "message": "Off disables everything; Native keeps the canvas/overlay unfiltered for FI." }
+  "extensionName": {
+    "message": "Video Enhancer for Firefox"
+  },
+  "extensionDescription": {
+    "message": "Local GPU motion interpolation, with optional FSR1, RAVU-lite and RCAS image enhancement."
+  },
+  "statusChecking": {
+    "message": "Checking…"
+  },
+  "detailLoading": {
+    "message": "Loading settings…"
+  },
+  "effect": {
+    "message": "Effect"
+  },
+  "modeNative": {
+    "message": "Native"
+  },
+  "qualityBadge": {
+    "message": "quality"
+  },
+  "sharpness": {
+    "message": "Sharpness (RCAS)"
+  },
+  "sharpnessPresetsAria": {
+    "message": "RCAS sharpness presets"
+  },
+  "soft": {
+    "message": "Soft"
+  },
+  "medium": {
+    "message": "Medium"
+  },
+  "strong": {
+    "message": "Strong"
+  },
+  "quality": {
+    "message": "Quality"
+  },
+  "duringBrowsing": {
+    "message": "While browsing"
+  },
+  "smoothness": {
+    "message": "Smoothness"
+  },
+  "balance": {
+    "message": "Balance"
+  },
+  "fidelity": {
+    "message": "Fidelity"
+  },
+  "hideOverlay": {
+    "message": "Hide overlay"
+  },
+  "reloadPage": {
+    "message": "Reload page"
+  },
+  "advancedDiagnostics": {
+    "message": "Advanced / Diagnostics"
+  },
+  "testOutline": {
+    "message": "Test outline"
+  },
+  "compare5050": {
+    "message": "50/50 comparison"
+  },
+  "experimentalSmoothing": {
+    "message": "Experimental smoothing"
+  },
+  "fiIntro": {
+    "message": "Lab: creates one midpoint per pair (up to 2×). Works with FSR1/RAVU, but RAVU can be expensive."
+  },
+  "disabled": {
+    "message": "Disabled"
+  },
+  "fiInitialDetail": {
+    "message": "The current result is subtle; treat this as experimental."
+  },
+  "smoothingDetails": {
+    "message": "Smoothing details (A/B)"
+  },
+  "fiPieces": {
+    "message": "Internal experiment controls. Change them only to isolate behavior."
+  },
+  "cutScenes": {
+    "message": "Cut on scene changes"
+  },
+  "lightMotion": {
+    "message": "Light motion sample (recommended)"
+  },
+  "estimateMotion": {
+    "message": "Estimate motion (WebGPU optical flow)"
+  },
+  "unsafeFallback": {
+    "message": "Uncertain motion keeps original frames"
+  },
+  "health": {
+    "message": "Health"
+  },
+  "videoOutput": {
+    "message": "Video / total output"
+  },
+  "anchorsMids": {
+    "message": "Anchors / FI midpoints"
+  },
+  "internalScale": {
+    "message": "Internal scale"
+  },
+  "fiMethod": {
+    "message": "FI method"
+  },
+  "matchConfidence": {
+    "message": "Match confidence"
+  },
+  "cutHoldPair": {
+    "message": "Cut hold / pair"
+  },
+  "meSample": {
+    "message": "ME sample"
+  },
+  "overlayNotDrawn": {
+    "message": "Overlay not drawn"
+  },
+  "videoDropped": {
+    "message": "Video frames dropped"
+  },
+  "callbacksLate": {
+    "message": "Late callbacks"
+  },
+  "cpuAnchor": {
+    "message": "CPU per anchor"
+  },
+  "gpuEffect": {
+    "message": "GPU upload + effect"
+  },
+  "decode": {
+    "message": "Decode"
+  },
+  "hintInitial": {
+    "message": "Off disables everything; Native keeps the canvas/overlay unfiltered for FI."
+  }
 }

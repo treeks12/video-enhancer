@@ -1,0 +1,4 @@
+{"file": "video-enhancer-0.0.63-store-firefox.zip", "flavor": "store", "browser": "firefox", "bytes": 209230, "sha256": "ed976b907809e9007236a5c7895ffb752d90975ffa92e69f1b5265077ef39892", "neuralWeightsBundled": false}
+{"file": "video-enhancer-0.0.63-store-chromium.zip", "flavor": "store", "browser": "chromium", "bytes": 209157, "sha256": "50fbdb9956c25d5a28bad8b77ca4693146181f875a47ca1831adbc48db6638f7", "neuralWeightsBundled": false}
+{"file": "video-enhancer-0.0.63-personal-firefox.zip", "flavor": "personal", "browser": "firefox", "bytes": 246320, "sha256": "212daee826b61f8bfefa36beb79013c6e720c7519180d25e350321a3076545ac", "neuralWeightsBundled": false}
+{"file": "video-enhancer-0.0.63-personal-chromium.zip", "flavor": "personal", "browser": "chromium", "bytes": 246254, "sha256": "6236a824ab6bb6de662711ce524810098d81e3a0f83938fa854f3cc79c7ea344", "neuralWeightsBundled": false}

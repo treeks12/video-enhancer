@@ -1,0 +1,14 @@
+[
+  {
+    "file": "video-enhancer-firefox-0.0.62.zip",
+    "bytes": 216822,
+    "sha256": "064602f96e7dd1bbd4c3491f14b658078dd82fd6ad13aff47a571c4f85dbaca5",
+    "modelBundled": false
+  },
+  {
+    "file": "video-enhancer-chromium-0.0.62.zip",
+    "bytes": 216751,
+    "sha256": "94c71a4f6fe835219717171e34e4749a674ff69dd06f8a2c583b49cc4b506763",
+    "modelBundled": false
+  }
+]

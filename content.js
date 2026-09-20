@@ -56,7 +56,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   interaction: "smooth",
   // Frame interpolation (A/B toggles). Defaults: infra off; sub-options ready.
   fiInfra: false,
-  fiEngine: "classic",
+  fiEngine: "analytic",
+  fiModelRevision: "",
   fiProfile: "balanced",
   fiDebug: 0,
   fiNeuralRevision: 0,
@@ -92,7 +93,8 @@ function normalizeSettings(value = {}) {
       ? value.interaction
       : DEFAULT_SETTINGS.interaction,
     ...fi,
-    fiEngine: value.fiEngine === "neural" ? "neural" : "classic",
+    fiEngine: ((globalThis.VE_BUILD?.personal !== false ? ["analytic","classic","neural","ifrnet"] : ["analytic","classic"]).includes(value.fiEngine)) ? value.fiEngine : "analytic",
+    fiModelRevision: typeof value.fiModelRevision === "string" ? value.fiModelRevision : "",
     fiProfile: value.fiProfile === "quality" ? "quality" : "balanced",
     fiDebug: [0, 1, 2, 3, 4].includes(Number(value.fiDebug)) ? Number(value.fiDebug) : 0,
     fiNeuralRevision: Number.isSafeInteger(value.fiNeuralRevision) ? value.fiNeuralRevision : 0,
@@ -480,6 +482,8 @@ let fiGpuEngine = null;
 let fiGpuInit = null;
 let fiGpuGeneration = 0;
 let fiNeuralFailure = "";
+let fiAnalyticStep = 0, fiAnalyticSlow = 0;
+let fiAnalyticLate = 0, fiAnalyticRetryAt = 0;
 let fiNeuralResult = null, fiNeuralTarget = null;
 let fiPairAnchorTime = 0, fiDisplayReference = 0;
 let fiGpuState = "idle";
@@ -830,7 +834,7 @@ function fiShouldPresentMid() {
     fiSkipReason = "Uncertain scene or motion — keeping the real cadence without duplicating the pipeline.";
     return false;
   }
-  if (!["block", "webgpu", "neural"].includes(fiMethod)) return false;
+  if (!["block", "webgpu", "neural", "analytic", "ifrnet"].includes(fiMethod)) return false;
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
   const budget = fiMidBudgetMs(lastVideoFrameDurationMs, fps);
   if (fiLastRealCpuMs > budget) {
@@ -1058,18 +1062,41 @@ function warmFiPrograms() {
 
 function fiWarmGpu() {
   if (!settings.fiInfra || fiGpuInit || fiGpuState === "unavailable") return;
-  if (fiGpuEngine && !fiGpuEngine.lost) return;
+  if (fiGpuEngine && !fiGpuEngine.lost) {
+    if (["analytic","ifrnet"].includes(fiGpuEngine.kind) && currentVideo &&
+        (fiGpuEngine.sourceW !== currentVideo.videoWidth || fiGpuEngine.sourceH !== currentVideo.videoHeight)) fiReleaseGpu(false);
+    else return;
+  }
+  if (settings.fiEngine !== "classic" && (!gl || !currentVideo?.videoWidth)) return;
   const generation = fiGpuGeneration;
   const requested = settings.fiEngine;
   const profile = settings.fiProfile;
   fiGpuState = "initializing";
   fiMeasureDisplay();
   fiGpuInit = Promise.resolve().then(async () => {
-    if (requested === "neural" && !fiNeuralFailure) {
+/* PERSONAL_ONLY_BEGIN */
+    if (globalThis.VE_BUILD?.personal !== false && requested === "neural" && !fiNeuralFailure) {
       try { return await FiNeural.create({ profile }); }
       catch (error) { if (generation === fiGpuGeneration) fiNeuralFailure = String(error.message || error); }
     }
+    if (globalThis.VE_BUILD?.personal !== false && requested === "ifrnet" && !fiNeuralFailure) {
+      try {
+        const bytes = await VENeuralClient.load();
+        if (generation !== fiGpuGeneration || !gl || !currentVideo?.videoWidth) return null;
+        const width=currentVideo.videoWidth,height=currentVideo.videoHeight;
+        const engine = await VENeuralRuntime.create(gl, bytes, width, height, profile);
+        engine.kind = "ifrnet"; engine.sourceW = width; engine.sourceH = height;
+        engine.whenLost = new Promise(() => {}); engine.stats = {completed:0,late:0,ms:0};
+        engine.modelSize = {width:engine.dimensions.activeW,height:engine.dimensions.activeH};
+        return engine;
+      } catch (error) { if (generation === fiGpuGeneration) fiNeuralFailure = String(error.message || error); }
+    }
+/* PERSONAL_ONLY_END */
     if (generation !== fiGpuGeneration) return null;
+    if (requested !== "classic") {
+      if (!gl || !currentVideo?.videoWidth) throw new Error("Waiting for a video and WebGL2 context");
+      return await FiAnalytic.create(gl, currentVideo.videoWidth, currentVideo.videoHeight, profile, fiAnalyticStep);
+    }
     if (typeof FiWebGpu === "undefined") throw new Error("WebGPU module unavailable. Reload the extension and page.");
     const engine = await FiWebGpu.create();
     engine.kind = "classic";
@@ -1085,12 +1112,14 @@ function fiWarmGpu() {
     fiGpuError = "";
     engine.whenLost.then(error => {
       if (fiGpuEngine !== engine) return;
-      if (engine.kind === "neural") { fiUseClassicFallback(engine, error); return; }
+/* PERSONAL_ONLY_BEGIN */
+      if (["neural","ifrnet"].includes(engine.kind)) { fiUseClassicFallback(engine, error); return; }
+/* PERSONAL_ONLY_END */
       fiGpuState = "unavailable";
       fiGpuError = String(error.message || error);
       fiMethod = "skip";
       fiGpuReadySerial = -1;
-      fiSkipReason = "WebGPU unavailable; showing original frames. " + fiGpuError;
+      fiSkipReason = "Motion backend unavailable; showing original frames. " + fiGpuError;
     });
   }).catch(error => {
     if (generation !== fiGpuGeneration) return;
@@ -1099,14 +1128,16 @@ function fiWarmGpu() {
   }).finally(() => { if (generation === fiGpuGeneration) fiGpuInit = null; });
 }
 
+/* PERSONAL_ONLY_BEGIN */
 function fiUseClassicFallback(engine, error) {
   if (fiGpuEngine !== engine) return;
   fiNeuralFailure = String(error?.message || error || "Neural processing failed");
   fiReleaseGpu(false);
-  fiSkipReason = "Neural unavailable; switching to classical WebGPU. " + fiNeuralFailure;
+  fiSkipReason = "Optional neural backend unavailable; using Analytic Flow. " + fiNeuralFailure;
   fiWarmGpu();
 }
 
+/* PERSONAL_ONLY_END */
 function fiReleaseGpu(clearNeuralFailure = true) {
   fiGpuGeneration++;
   fiGpuInit = null;
@@ -1124,6 +1155,7 @@ function fiReleaseGpu(clearNeuralFailure = true) {
   if (engine) engine.destroy();
 }
 
+/* PERSONAL_ONLY_BEGIN */
 function fiRequestNeuralPair() {
   const engine = fiGpuEngine, serial = fiPairSerial, video = currentVideo;
   fiNeuralResult = fiNeuralTarget = null;
@@ -1165,6 +1197,53 @@ function fiRequestNeuralPair() {
   return true;
 }
 
+/* PERSONAL_ONLY_END */
+function fiRequestAnalyticPair() {
+  const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo;
+  if (!fiHasPrev || fiPairDiscontinuous || !settings.fiBlockMatch || fiGpuBusy) return false;
+  if(performance.now()<fiAnalyticRetryAt){fiSkipReason="Analytic cooldown after sustained overload; preserving source frames.";return false;}
+  const duration=lastVideoFrameDurationMs || 1000/((metricReport.videoFps||30)*(video.playbackRate||1));
+  if (duration<fiDisplayPeriod*1.45) {fiSkipReason="No additional display slot; preserving the source cadence.";return false;}
+  fiGpuBusy=true;fiMethod="pending";fiSkipReason="Estimating bidirectional motion on the GPU.";
+  engine.estimate(fiPrevTexture,fiCurrTexture,serial).then(result=>{
+    if(fiGpuEngine!==engine || video!==currentVideo || !settings.fiInfra || !canRender())return;
+    fiGpuElapsedMs=result?.elapsedMs||0;
+    fiAnalyticSlow=fiGpuElapsedMs>duration*.8 ? fiAnalyticSlow+1 : 0;
+    // Reduce inference work only between pairs; never mutate active textures.
+    if(fiAnalyticSlow>=4){
+      if(fiAnalyticStep<2){fiAnalyticStep++;fiAnalyticSlow=0;fiReleaseGpu(false);fiWarmGpu();return;}
+      fiAnalyticSlow=0;fiAnalyticRetryAt=performance.now()+3000;
+    }
+    if(!result || !result.valid || serial!==fiPairSerial || fiGpuElapsedMs>=duration){
+      fiAnalyticLate++;if(serial===fiPairSerial){fiMethod="skip";fiSkipReason="Motion arrived late; keeping the timed source anchor.";}return;
+    }
+    if(settings.fiSceneCut&&result.sceneCut){fiMethod="skip";fiSkipReason="Scene cut; keeping original anchors.";return;}
+    fiConfidence=result.confidence;fiGpuReadySerial=serial;fiMethod="analytic";fiSkipReason="";
+  }).catch(error=>{
+    if(fiGpuEngine!==engine)return;fiGpuError=String(error.message||error);fiGpuState="unavailable";
+    fiMethod="skip";fiGpuReadySerial=-1;engine.destroy();fiSkipReason="Analytic Flow unavailable; showing original frames. "+fiGpuError;
+  }).finally(()=>{if(fiGpuEngine===engine)fiGpuBusy=false;});
+  return true;
+}
+
+/* PERSONAL_ONLY_BEGIN */
+function fiRequestIfrPair() {
+  const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo;
+  const duration=lastVideoFrameDurationMs||1000/((metricReport.videoFps||30)*(video.playbackRate||1));
+  const slot=FiQuality.neuralSlot(fiPairAnchorTime,duration,fiDisplayPeriod,fiDisplayReference||fiPairAnchorTime);
+  fiNeuralResult=fiNeuralTarget=null;
+  if(!slot||!fiHasPrev||fiPairDiscontinuous||fiGpuBusy||!settings.fiBlockMatch)return false;
+  fiNeuralTarget=slot;fiGpuBusy=true;fiMethod="pending";
+  engine.estimate(fiPrevTexture,fiCurrTexture,serial,slot.phase).then(result=>{
+    if(fiGpuEngine!==engine||video!==currentVideo||serial!==fiPairSerial||!settings.fiInfra||!canRender())return;
+    fiGpuElapsedMs=result?.elapsedMs||0;engine.stats.ms=fiGpuElapsedMs;engine.stats.completed++;
+    if(!result?.valid||performance.now()>slot.expires){engine.stats.late++;fiMethod="skip";return;}
+    if(settings.fiSceneCut&&result.sceneCut){fiMethod="skip";fiSkipReason="Scene cut; keeping original anchors.";return;}
+    fiNeuralResult=result;fiGpuReadySerial=serial;fiMethod="ifrnet";fiSkipReason="";
+  }).catch(error=>fiUseClassicFallback(engine,error)).finally(()=>{if(fiGpuEngine===engine)fiGpuBusy=false;});return true;
+}
+
+/* PERSONAL_ONLY_END */
 function fiMeasureDisplay() {
   if (fiDisplayRaf !== null) return;
   let previous = null;
@@ -1191,10 +1270,16 @@ function fiRequestGpuPair() {
   fiLastBackwardMatch = null;
   fiWarmGpu();
   if (!fiGpuEngine || fiGpuEngine.lost || fiGpuState !== "ready") {
-    fiSkipReason = fiGpuError || "Preparing WebGPU optical flow; showing original frames.";
+    fiSkipReason = fiGpuError || "Preparing the motion backend; showing original frames.";
     return false;
   }
+/* PERSONAL_ONLY_BEGIN */
   if (fiGpuEngine.kind === "neural") return fiRequestNeuralPair();
+/* PERSONAL_ONLY_END */
+  if (fiGpuEngine.kind === "analytic") return fiRequestAnalyticPair();
+/* PERSONAL_ONLY_BEGIN */
+  if (fiGpuEngine.kind === "ifrnet") return fiRequestIfrPair();
+/* PERSONAL_ONLY_END */
   if (!settings.fiBlockMatch) {
     fiSkipReason = "Motion estimation disabled; showing original frames.";
     return false;
@@ -1501,6 +1586,19 @@ function fiComputeDecision() {
 }
 
 function fiRenderMidToOut(phase) {
+  if (fiMethod === "analytic") {
+    if (!fiHasPrev || !fiHasCurr || fiGpuReadySerial!==fiPairSerial || !fiGpuEngine ||
+        !fiEnsureOut(textureWidth,textureHeight)) return false;
+    return fiGpuEngine.render(fiPrevTexture,fiCurrTexture,fiOutTexture,textureWidth,textureHeight,phase,settings.fiDebug);
+  }
+/* PERSONAL_ONLY_BEGIN */
+  if (fiMethod === "ifrnet") {
+    if (!fiHasPrev || !fiHasCurr || fiGpuReadySerial!==fiPairSerial || !fiGpuEngine ||
+        !fiEnsureOut(textureWidth,textureHeight)) return false;
+    if(!fiNeuralTarget || !fiNeuralResult || performance.now()>fiNeuralTarget.expires || Math.abs(phase-fiNeuralTarget.phase)>.001)return false;
+    return fiGpuEngine.render(fiPrevTexture,fiCurrTexture,fiOutTexture,textureWidth,textureHeight,
+      ["off","flow","mask","residual","off"][settings.fiDebug]);
+  }
   if (fiMethod === "neural") {
     const result = fiNeuralResult;
     if (!result || result.serial !== fiPairSerial || fiGpuReadySerial !== fiPairSerial ||
@@ -1514,6 +1612,7 @@ function fiRenderMidToOut(phase) {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, result.canvas);
     return true;
   }
+/* PERSONAL_ONLY_END */
   if (fiMethod !== "webgpu" && fiMethod !== "block") return false;
   if (fiMethod === "webgpu" && fiGpuReadySerial !== fiPairSerial) return false;
   if (!fiLastMatch || !fiLastBackwardMatch || !fiForwardMvTexture || !fiBackwardMvTexture) return false;
@@ -1575,7 +1674,7 @@ function fiAfterVideoUpload(video) {
   fiCopyTexture(texture, fiCurrTexture, w, h);
   fiHasCurr = true;
   fiPairSerial++;
-  fiUpdateLumaSample(video);
+  if (!["analytic","ifrnet"].includes(fiGpuEngine?.kind)) fiUpdateLumaSample(video);
   return fiRequestGpuPair();
 }
 
@@ -1596,17 +1695,19 @@ function fiScheduleMidFrame(pairSerial, metadata) {
     if (!canRender() || !settings.fiInfra) return;
     if (pairSerial !== fiPairSerial || !fiHasCurr) return;
     fiDisplayReference = now;
-    if (fiGpuEngine?.kind === "neural") {
+/* PERSONAL_ONLY_BEGIN */
+    if (["neural","ifrnet"].includes(fiGpuEngine?.kind)) {
       const slot = fiNeuralTarget;
       if (!slot || now > slot.expires) { fiSkipReason = "Neural presentation slot expired; keeping the anchor."; return; }
       if (now < slot.time - .5 || fiMethod === "pending") { fiMidRaf = requestAnimationFrame(present); return; }
-      if (fiMethod !== "neural" || fiGpuReadySerial !== pairSerial || !fiNeuralResult) return;
+      if (!["neural","ifrnet"].includes(fiMethod) || fiGpuReadySerial !== pairSerial || !fiNeuralResult) return;
       // Display precisely the phase that was inferred; do not relabel a cached
       // midpoint as a later phase to inflate the output frame rate.
       try { draw({ fiMid: true, fiPhase: slot.phase }); }
       catch (error) { fiUseClassicFallback(fiGpuEngine, error); }
       return;
     }
+/* PERSONAL_ONLY_END */
     const phase = typeof fiPresentationPhase === "function"
       ? fiPresentationPhase(now, anchorTime, duration)
       : Math.max(0, Math.min(1, (now - anchorTime) / duration));
@@ -1620,7 +1721,7 @@ function fiScheduleMidFrame(pairSerial, metadata) {
       fiMidRaf = requestAnimationFrame(present);
       return;
     }
-    if (fiMethod !== "webgpu" || fiGpuReadySerial !== pairSerial) return;
+    if (!["webgpu","analytic"].includes(fiMethod) || fiGpuReadySerial !== pairSerial) return;
     const estimatedCost = Math.max(
       fiMidCpuMs,
       metricReport.gpuMs || 0,
@@ -2196,6 +2297,9 @@ function draw(options = {}) {
   }
 
   if (!srcW || !srcH) return;
+  // Optional same-context inference can bind its private VAO. Rebind the
+  // upscaler VAO after all capture/synthesis paths, not only at draw entry.
+  gl.bindVertexArray(vao);
 
   if (settings.mode === "ravu" &&
       shouldUseRavu(srcW, srcH, canvas.width, canvas.height, settings.quality)) {
@@ -2687,7 +2791,8 @@ function applySettings(value) {
   const previous = settings;
   settings = normalizeSettings(value);
   const engineChanged = settings.fiEngine !== previous.fiEngine ||
-    settings.fiProfile !== previous.fiProfile || settings.fiNeuralRevision !== previous.fiNeuralRevision;
+    settings.fiProfile !== previous.fiProfile || settings.fiNeuralRevision !== previous.fiNeuralRevision || settings.fiModelRevision !== previous.fiModelRevision;
+  if (engineChanged) {fiAnalyticStep=0;fiAnalyticSlow=0;fiAnalyticRetryAt=0;/* PERSONAL_ONLY_BEGIN */globalThis.VENeuralClient?.clear();/* PERSONAL_ONLY_END */}
   if ((!settings.fiInfra && previous.fiInfra) || engineChanged) fiReleaseGpu();
   const modeChanged = settings.mode !== previous.mode;
   const qualityChanged = settings.quality !== previous.quality;
@@ -2803,21 +2908,23 @@ function snapshot() {
     metrics: { ...metricReport, gpuSupported: Boolean(timerExt) },
     fi: {
       presentationDelayMs: fiLatencyActive ? lastVideoFrameDurationMs : 0,
-      backend: fiGpuState === "ready" ? (fiGpuEngine?.kind === "neural" ? "WebGPU compact neural" : "WebGPU optical flow") : fiGpuState,
+      backend: fiGpuState === "ready" ? ({neural:"Framegen compact neural (WebGPU)",ifrnet:"IFRNet-S neural (WebGL2)",analytic:"Analytic Flow (WebGL2; no neural weights)",classic:"Legacy LK (WebGPU)"}[fiGpuEngine?.kind]||"Preparing") : fiGpuState,
       requestedEngine: settings.fiEngine,
       actualEngine: fiGpuEngine?.kind || "none",
       fallbackReason: fiNeuralFailure,
       profile: settings.fiProfile,
-      neural: fiGpuEngine?.kind === "neural" ? { ...fiGpuEngine.stats, modelSize: fiGpuEngine.modelSize, debug: settings.fiDebug } : null,
+      edition: globalThis.VE_BUILD?.flavor || "personal",
+      analytic: fiGpuEngine?.kind === "analytic" ? {...fiGpuEngine.stats, late:fiAnalyticLate, step:fiAnalyticStep, cooldownMs:Math.max(0,fiAnalyticRetryAt-now)} : null,
+      neural: ["neural","ifrnet"].includes(fiGpuEngine?.kind) ? { ...fiGpuEngine.stats, modelSize: fiGpuEngine.modelSize, debug: settings.fiDebug } : null,
       computeMs: fiGpuElapsedMs,
       backendError: fiGpuError,
       method: fiMethod,
-      confidence: fiGpuEngine?.kind === "neural" ? null : fiConfidence,
+      confidence: ["neural","ifrnet"].includes(fiGpuEngine?.kind) ? null : fiConfidence,
       videoFps: metricReport.videoFps || 0,
       sceneCutHold: fiSceneCutHold,
       hasPair: fiHasPrev && fiHasCurr,
       halfLuma: Boolean(settings.fiHalfLuma),
-      sample: fiLumaW && fiLumaH ? `${fiLumaW}×${fiLumaH}` : "—",
+      sample: fiGpuEngine?.kind === "analytic" ? `${fiGpuEngine.dimensions.width}×${fiGpuEngine.dimensions.height} dense flow` : fiLumaW && fiLumaH ? `${fiLumaW}×${fiLumaH}` : "—",
       midPerSec: fiMidPerSec,
       realPerSec: fiRealPerSec,
       explain: fiSkipReason || fiGpuError || fiExplainStatus(),

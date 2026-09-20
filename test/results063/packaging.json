@@ -1,0 +1,38 @@
+{
+  "result": "PASS",
+  "cases": [
+    {
+      "browser": "firefox",
+      "edition": "store",
+      "files": 22,
+      "result": "PASS"
+    },
+    {
+      "browser": "firefox",
+      "edition": "personal",
+      "files": 39,
+      "result": "PASS"
+    },
+    {
+      "browser": "chromium",
+      "edition": "store",
+      "files": 22,
+      "result": "PASS"
+    },
+    {
+      "browser": "chromium",
+      "edition": "personal",
+      "files": 39,
+      "result": "PASS"
+    }
+  ],
+  "checks": [
+    "exact allowlist",
+    "no model files or download permissions in store",
+    "untrusted stored engine names normalize",
+    "runtimes preserved in personal",
+    "all shipped JavaScript syntax",
+    "byte-reproducible ZIPs",
+    "malformed markers fail closed"
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "result": "PASS",
+  "base": "Framegen 0.0.62 source-handoff, not the distinct IFRNet 0.0.62 artifact",
+  "files": 31,
+  "checked": "git apply --check, applied, compared exact bytes for every patched file",
+  "patchSHA256": "febc3950e6c15d9a18793892514e80f7dda72518466ec06ff51d9ee9e9cb5379"
+}

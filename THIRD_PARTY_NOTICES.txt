@@ -51,3 +51,13 @@ hardware-tuned performance. No pretrained weights were trained by this project.
 Optional rt_v7s weights are NOT covered by MIT: see
 third_party/framegen/WEIGHTS_LICENSE.md (personal/noncommercial research only).
 Weights are installed only on explicit user action or by an offline builder.
+
+IFRNet-S optional backend (0.0.63 personal edition)
+The separate 0.0.62 IFRNet-S implementation is preserved in neural/.
+Reference implementation: https://github.com/ltkong218/IFRNet
+Reference model port: https://github.com/nihui/ifrnet-ncnn-vulkan
+Code notices: neural/LICENSE-IFRNet.txt, neural/LICENSE-ncnn-port.txt.
+Checkpoint identity and provenance: neural/MODEL-CARD.md.
+Repository code licenses alone are not a certification of every checkpoint,
+training data right or downstream distribution. No IFRNet checkpoint is bundled.
+The store build excludes this backend and its installer entirely.

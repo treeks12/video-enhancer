@@ -1,0 +1,15 @@
+{
+  "results": [
+    {
+      "edition": "store",
+      "result": "PASS",
+      "browser": "144.0.7559.96"
+    },
+    {
+      "edition": "personal",
+      "result": "PASS",
+      "browser": "144.0.7559.96"
+    }
+  ],
+  "note": "Packaged UI only, extension APIs mocked. No browser WebGL/WebGPU context available. Screenshot metrics are fixtures, not performance results."
+}

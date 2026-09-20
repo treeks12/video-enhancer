@@ -10,7 +10,7 @@ button.onclick=async()=>{
   const reference=JSON.parse(new TextDecoder().decode(await bytes('reference.json'))),manifest=JSON.parse(new TextDecoder().decode(await bytes('model.json'))),bin=await bytes('model.bin');
   for(const half of [false,true]){
    // Fresh adapter per pass: this Chrome build consumes a GPUAdapter after one
-   // requestDevice, so the shared adapter broke the FP16 half of the run.
+   // requestDevice, so a shared adapter broke the FP16 half of the run.
    const adapter=await navigator.gpu.requestAdapter();if(!adapter)throw new Error('No WebGPU adapter');
    if(half&&!adapter.features.has('shader-f16')){write('SKIP FP16: shader-f16 unavailable');continue;}
    const device=await adapter.requestDevice({requiredFeatures:half?['shader-f16']:[]});const resources=[];let rt=null;

@@ -1,0 +1,39 @@
+{
+  "version": "0.0.63",
+  "edition": "personal",
+  "savedAt": "2026-09-19T05:18:34.567Z",
+  "status": "ok",
+  "pipeline": "RAVU + Analytic (fixture)",
+  "settings": {
+    "mode": "ravu",
+    "strength": 35,
+    "quality": "high",
+    "interaction": "smooth",
+    "fiInfra": true,
+    "fiEngine": "analytic",
+    "fiProfile": "quality",
+    "fiDebug": 0
+  },
+  "metrics": {
+    "videoFps": 30,
+    "fps": 30,
+    "midFps": 0,
+    "renderScale": 1
+  },
+  "fi": {
+    "backend": "Analytic Flow (WebGL2; no neural weights)",
+    "actualEngine": "analytic",
+    "hasPair": true,
+    "explain": "UI test fixture, not a hardware measurement",
+    "computeMs": 0,
+    "midPerSec": 0,
+    "analytic": {
+      "completed": 0,
+      "late": 0,
+      "p95": 0,
+      "coverage": 0
+    },
+    "sample": "320 × 180 dense flow"
+  },
+  "note": "Local diagnostic snapshot. No video pixels. Not a quality or licensing certification."
+}

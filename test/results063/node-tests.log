@@ -1,0 +1,40 @@
+
+> node content.js
+[fv-fi] fiSelfCheck OK
+[fv-enhancer] selfCheck OK
+
+> node fi-core.js
+[fv-fi] fiSelfCheck OK
+
+> node test/cadence.cjs
+PASS: interpolation cadence covers 24/30/60 fps, fallbacks, skips, and deadlines
+PASS: neural scheduler preserves inferred phase and drops expired output
+
+> node test/quality.cjs
+PASS: 63488 half patterns, subnormal regressions, phases, dimensions, isolated outliers and thin guide edges
+
+> node test/half-oracle.cjs
+PASS: 100000 independent NumPy float32 -> binary16 oracle cases
+
+> node test/model.cjs
+PASS: model schema/bounds/nonfinite rejection, FiLM math, portable kernel workgroup memory
+
+> node test/model-storage.cjs
+PASS: atomic model storage, binary checksum, schema rejection, download origin and streaming byte limits
+
+> node test/neural-runtime.cjs
+PASS: actual runtime host graph in FP32/FP16, 19 dispatches, resource reuse, alias rejection and failure cleanup (mock GPU, not shader execution)
+
+> node test/neural-lifecycle.cjs
+PASS: snapshot ring, single flight, serial changes, reset, stale-result rejection and destruction (mock GPU)
+
+> node test/neural-init.cjs
+PASS: async backend-init generation race and missing-model fallback use production controller functions
+
+> node test/analytic-host.cjs
+PASS analytic host: graph lifetime, single flight, invalid epochs, cuts, nonfinite rejection, cancellation, disposal and GL state isolation (mock GL, not shader execution)
+
+> node test/analytic-controller.cjs
+PASS production analytic controller: single flight, stale serial, scene cut, valid presentation, adaptive resolution, minimum-tier cooldown, display cadence guard
+
+PASS: complete Node test suite. GPU shader execution is a separate test.

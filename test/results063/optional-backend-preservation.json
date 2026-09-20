@@ -1,0 +1,86 @@
+[
+  {
+    "file": "fi-neural-runtime.js",
+    "preservedByteIdentical": true,
+    "sha256": "b5b087ecd83a52dd5dbea38721460930af87fe8334638954840fb82c672b2a40",
+    "baseline": "Framegen 0.0.62"
+  },
+  {
+    "file": "fi-neural.js",
+    "preservedByteIdentical": true,
+    "sha256": "5280dec279deca45f082771e56441df0f0c3d8b7709b5a05e566cdadb2227a3a",
+    "baseline": "Framegen 0.0.62"
+  },
+  {
+    "file": "neural-model.js",
+    "preservedByteIdentical": true,
+    "sha256": "3675f4f4268b1bb4b4a4721b3db76e2fdb71e2f6e37c41b93738c9df4a1f7f58",
+    "baseline": "Framegen 0.0.62"
+  },
+  {
+    "file": "models.js",
+    "preservedByteIdentical": true,
+    "sha256": "90e207809dfea750fccb695491582f06de508b142abce5f127fe361640b4783a",
+    "baseline": "Framegen 0.0.62"
+  },
+  {
+    "file": "models.html",
+    "preservedByteIdentical": true,
+    "sha256": "30fa421f417aca36e3f73646f03bcc52e35acb74bed4cc5671d9199523ea2797",
+    "baseline": "Framegen 0.0.62"
+  },
+  {
+    "file": "models.css",
+    "preservedByteIdentical": true,
+    "sha256": "52994bf9257034958c3da0298c0347a1aa1fabf1a7eaa0a78c8acd4e4bed7e3a",
+    "baseline": "Framegen 0.0.62"
+  },
+  {
+    "file": "neural/MODEL-CARD.md",
+    "preservedByteIdentical": true,
+    "sha256": "0b96d295c620856520e21c7667deb9f703ac415b22e81666594815a89998a7dd",
+    "baseline": "IFRNet 0.0.62"
+  },
+  {
+    "file": "neural/LICENSE-IFRNet.txt",
+    "preservedByteIdentical": true,
+    "sha256": "2d97c3bf1f1e0edef92727f4e6324e784e9ec84bf71330edca0b15af4581e343",
+    "baseline": "IFRNet 0.0.62"
+  },
+  {
+    "file": "neural/graph.js",
+    "preservedByteIdentical": true,
+    "sha256": "fd7e825aaaec003f6d5d44912403bde25706e94836629034f1ec38a68d9db46d",
+    "baseline": "IFRNet 0.0.62"
+  },
+  {
+    "file": "neural/model-spec.js",
+    "preservedByteIdentical": true,
+    "sha256": "8fb20a00eb2ec22c4f3a30aa0d03207d1311308ee99881f422582221e1186faf",
+    "baseline": "IFRNet 0.0.62"
+  },
+  {
+    "file": "neural/LICENSE-ncnn-port.txt",
+    "preservedByteIdentical": true,
+    "sha256": "5781f7d8d43c367a3912eb7452efabe896299f06d20178c235f8fbfa011c48d4",
+    "baseline": "IFRNet 0.0.62"
+  },
+  {
+    "file": "neural/runtime.js",
+    "preservedByteIdentical": true,
+    "sha256": "04f34acd80dd7ef2f9bbb8b922d45fd2511ed8d8db7cf1a94a1eef2e470c3235",
+    "baseline": "IFRNet 0.0.62"
+  },
+  {
+    "file": "neural/background.js",
+    "preservedByteIdentical": true,
+    "sha256": "f0eba881af289951fabf4fe083b7237c18a0c6378c34f8eaa8f5654ba272b552",
+    "baseline": "IFRNet 0.0.62"
+  },
+  {
+    "file": "neural/client.js",
+    "preservedByteIdentical": true,
+    "sha256": "6e54b1a9a6fd7bfaccc7329bcb8f3d694fa5c73d6ac6f41513cc8d454655f6e3",
+    "baseline": "IFRNet 0.0.62"
+  }
+]

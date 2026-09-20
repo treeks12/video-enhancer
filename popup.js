@@ -65,7 +65,7 @@ function renderInterpolation(state) {
   const backendFailed = fi.backendError || /fail|error|unsupported|unavailable|disabled/.test(backend);
   if (enabled && backendFailed) {
     tone = "error";
-    title = "WebGPU unavailable";
+    title = "Motion backend unavailable";
     status = "Motion interpolation is not available in this browser session.";
   } else if (enabled && (!state.hasVideo || state.status === "no-video" || state.status === "idle")) {
     tone = "warn";
@@ -87,19 +87,29 @@ function renderInterpolation(state) {
   } else if (enabled) {
     tone = "warn";
     title = "Starting interpolation";
-    status = "Preparing WebGPU motion estimation…";
+    status = "Preparing motion estimation…";
   }
   if (enabled && fi.fallbackReason) {
     tone = "warn"; title = "Neural fallback: classical engine"; status = fi.fallbackReason;
-  } else if (enabled && fi.actualEngine === "neural") {
+  } else if (enabled && ["neural","ifrnet"].includes(fi.actualEngine)) {
     tone = number(fi.midPerSec) > 0 ? "ok" : "warn";
     title = number(fi.midPerSec) > 0 ? "Compact neural active" : "Neural: preparing or missing slots";
     status = fi.explain || "Local neural reconstruction with source-resolution synthesis.";
   }
-  fiEngine.value = state.settings.fiEngine || "classic";
+  if (enabled && state.settings.mode !== "off" && state.settings.fiBlockMatch !== false && state.visible && fi.actualEngine === "analytic") {
+    tone=number(fi.midPerSec)>0?"ok":"warn";
+    title=number(fi.midPerSec)>0?"Analytic interpolation active":"Analytic: preparing or missing slots";
+    status=fi.explain || "Local GPU motion; no neural weights.";
+    if(fi.fallbackReason){tone="warn";title="Analytic fallback (not neural)";status=fi.fallbackReason;}
+  }
+  fiEngine.value = state.settings.fiEngine || "analytic";
   fiProfile.value = state.settings.fiProfile || "balanced";
   fiDebug.value = String(state.settings.fiDebug || 0);
-  fiDebug.disabled = fiEngine.value !== "neural";
+  fiDebug.disabled = fiEngine.value === "classic";
+  const debugOptions=fiDebug.options;
+  debugOptions[3].textContent=fiEngine.value==='ifrnet'?'Refine residual':'Warp disagreement';
+  debugOptions[4].textContent=fiEngine.value==='analytic'?'Fallback regions':'Refine residual';
+  debugOptions[4].disabled=fiEngine.value==='ifrnet';
   $("#fiStatus").dataset.tone = tone;
   $("#fiStatusTitle").textContent = title;
   $("#fiStatusDetail").textContent = status;
@@ -108,9 +118,10 @@ function renderInterpolation(state) {
   $("#fiMethod").textContent = enabled ? (fi.backend || fi.method || "Starting") : "Off";
   $("#fiConfidence").textContent = enabled && fi.confidence != null ? `${Math.round(number(fi.confidence) * 100)}%` : "—";
   $("#fiHold").textContent = enabled ? `${number(fi.sceneCutHold)} · ${fi.hasPair ? "ready" : "buffering"}` : "—";
-  const neural = fi.neural;
+  const neural = fi.neural || fi.analytic;
   $("#fiSample").textContent = neural?.modelSize ? `${neural.modelSize.width}×${neural.modelSize.height} model` : (fi.sample || "—");
-  $("#fiNeuralStats").textContent = neural ? `${fixed(neural.p95)} ms · ${neural.completed} / ${neural.late}` : "n/a";
+  $("#fiNeuralStats").textContent = neural ? `${fixed(neural.p95)} ms · ${number(neural.completed)} / ${number(neural.late)}` : "n/a";
+  $("#fiCoverage").textContent=fi.analytic?`${Math.round(number(fi.analytic.coverage)*100)}% sampled support`:'n/a';
   $("#fiRates").textContent = enabled ? `${fixed(fi.realPerSec,0)} / ${fixed(fi.midPerSec,0)} per s` : "—";
 }
 
@@ -137,7 +148,7 @@ function render(state) {
   outline.checked = settings.outline === true; compare.checked = settings.compare === true;
   fiSceneCut.checked = settings.fiSceneCut !== false; fiHalfLuma.checked = settings.fiHalfLuma !== false;
   fiBlockMatch.checked = settings.fiBlockMatch !== false; fiFallback.checked = true;
-  fiSceneCut.disabled = !settings.fiInfra; fiHalfLuma.disabled = !settings.fiInfra || settings.fiEngine === "neural"; fiBlockMatch.disabled = !settings.fiInfra; fiFallback.disabled = true;
+  fiSceneCut.disabled = !settings.fiInfra; fiHalfLuma.disabled = !settings.fiInfra || settings.fiEngine !== "classic"; fiBlockMatch.disabled = !settings.fiInfra; fiFallback.disabled = true;
   toggle.disabled = settings.mode === "off" || !state.hasVideo || state.status !== "ok";
   toggle.textContent = state.visible ? "Hide overlay" : "Show overlay";
   renderInterpolation(state);
@@ -193,13 +204,15 @@ fiInfra.addEventListener("change",()=>{
   updateSettings(patch).catch(unavailable);
 });
 for (const input of [fiEngine,fiProfile,fiDebug]) input.addEventListener("change",()=>updateSettings({[input.id]:input.id==="fiDebug"?Number(input.value):input.value}).catch(unavailable));
-$("#modelSetup").addEventListener("click",()=>ext.runtime.openOptionsPage());
+/* PERSONAL_ONLY_BEGIN */
+$("#modelSetup")?.addEventListener("click",()=>ext.runtime.openOptionsPage());
+/* PERSONAL_ONLY_END */
 for (const input of [fiSceneCut,fiHalfLuma,fiBlockMatch]) input.addEventListener("change",()=>updateSettings({[input.id]:input.checked}).catch(unavailable));
 toggle.addEventListener("click",()=>send("fv-toggle").then(render).catch(unavailable));
 reload.addEventListener("click",async()=>{await ext.tabs.reload(tabId);window.close()});
 
 async function init() {
-  try { $("#version").textContent=`v${ext.runtime.getManifest().version}`; } catch { $("#version").textContent="v—"; }
+  try { $("#version").textContent=`v${ext.runtime.getManifest().version} · ${globalThis.VE_BUILD?.personal===false?"Store":"Personal"}`; } catch { $("#version").textContent="v—"; }
   const [tab] = await ext.tabs.query({active:true,currentWindow:true}); tabId = tab?.id;
   if (tabId === undefined) throw new Error("Active tab not found");
   reload.disabled = false; render(await send("fv-status"));
@@ -207,3 +220,36 @@ async function init() {
 
 init().catch(unavailable);
 setInterval(()=>{if(tabId!==undefined&&!controlsLocked&&!pendingUpdates&&!draggingStrength)send("fv-status").then(render).catch(unavailable)},1000);
+
+/* PERSONAL_ONLY_BEGIN */
+// Optional neural installation is absent from store bundles, not merely hidden.
+if(globalThis.VE_BUILD?.personal !== false){
+ const setModelStatus=text=>{$("#ifrStatus").textContent=text;};
+ const modelCall=async(type,extra={})=>{const v=await ext.runtime.sendMessage({type,...extra});if(!v?.ok)throw new Error(v?.error||"Model service unavailable");return v;};
+ $("#ifrDownload")?.addEventListener("click",async()=>{try{
+   const granted=await ext.permissions.request({origins:["https://raw.githubusercontent.com/*"]});
+   if(!granted)throw new Error("Download permission not granted. Import remains available.");
+   setModelStatus("Downloading and verifying IFRNet-S…");await modelCall("ve-model-download");setModelStatus("IFRNet-S installed locally.");
+ }catch(e){setModelStatus(e.message);}});
+ $("#ifrImport")?.addEventListener("change",async event=>{try{
+   const f=event.target.files?.[0];if(!f)return;if(f.size!==5921992)throw new Error("Use the exact IFRNet-S GoPro .bin (5,921,992 bytes).");
+   const b=new Uint8Array(await f.arrayBuffer());let text="";for(let i=0;i<b.length;i+=16384)text+=String.fromCharCode(...b.subarray(i,i+16384));
+   await modelCall("ve-model-import",{data:btoa(text)});setModelStatus("IFRNet-S imported and verified.");
+ }catch(e){setModelStatus(e.message);}finally{event.target.value="";}});
+ $("#ifrRemove")?.addEventListener("click",async()=>{try{await modelCall("ve-model-remove");setModelStatus("IFRNet-S removed.");}catch(e){setModelStatus(e.message);}});
+}
+
+/* PERSONAL_ONLY_END */
+
+$("#saveDiagnostics")?.addEventListener("click",async()=>{
+  try{
+    const state=await send("fv-status");
+    const payload={version:ext.runtime.getManifest().version,edition:globalThis.VE_BUILD?.flavor,
+      savedAt:new Date().toISOString(),status:state.status,pipeline:state.pipeline,
+      settings:state.settings,metrics:state.metrics,fi:state.fi,
+      note:"Local diagnostic snapshot. No video pixels. Not a quality or licensing certification."};
+    const url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)],{type:"application/json"}));
+    const link=document.createElement("a");link.href=url;link.download="video-enhancer-diagnostics.json";link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){hint.textContent="Could not export diagnostics: "+error.message;}
+});

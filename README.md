@@ -1,3 +1,9 @@
+# Current development delivery: 0.0.63
+
+See **[LEIA-0.0.63.md](LEIA-0.0.63.md)** for the Store/Personal build split, independent Analytic Flow backend, preserved optional neural models and measured limitations. The historical README below describes earlier versions; do not use its old build commands for 0.0.63.
+
+---
+
 ## 0.0.62 experimental: optional compact neural backend
 
 This snapshot adds a local WebGPU implementation of Framegen's compact t-factored

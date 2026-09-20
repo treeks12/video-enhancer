@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[1]
 BASE='https://cdn.jsdelivr.net/npm/framegen@1.4.0/weights/'
 
 def download(name, limit):
-    request=urllib.request.Request(BASE+name,headers={'User-Agent':'VideoEnhancer-ModelInstaller/0.0.63'})
+    request=urllib.request.Request(BASE+name,headers={'User-Agent':'VideoEnhancer-ModelInstaller/0.0.62'})
     with urllib.request.urlopen(request,timeout=60) as r:
         if r.geturl()!=BASE+name: raise RuntimeError('Unexpected model redirect')
         data=r.read(limit+1)

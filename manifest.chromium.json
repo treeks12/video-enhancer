@@ -45,12 +45,18 @@
         "https://*/*"
       ],
       "js": [
+        "build-flavor.js",
+        "fi-analytic.js",
         "fi-quality.js",
         "fi-core.js",
         "fi-webgpu.js",
         "fi-neural-runtime.js",
         "neural-model.js",
         "fi-neural.js",
+        "neural/model-spec.js",
+        "neural/graph.js",
+        "neural/runtime.js",
+        "neural/client.js",
         "content.js"
       ],
       "run_at": "document_idle"
@@ -61,6 +67,10 @@
     "open_in_tab": true
   },
   "optional_host_permissions": [
-    "https://cdn.jsdelivr.net/*"
-  ]
+    "https://cdn.jsdelivr.net/*",
+    "https://raw.githubusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "neural/background.js"
+  }
 }

@@ -1,0 +1,28 @@
+{
+  "version": "0.0.63",
+  "date": "2026-09-19",
+  "result": "experimental candidate",
+  "nodeSuite": "PASS",
+  "packaging": "PASS",
+  "ui": "PASS with mocked extension APIs",
+  "shaderExecution": "8 shipping shaders executed on EGL/GLES Mesa llvmpipe software",
+  "syntheticScenePhases": 48,
+  "sourceScales": [
+    1,
+    2
+  ],
+  "physicalGPU": false,
+  "browserWebGL": false,
+  "trainedCheckpointCompared": false,
+  "neuralQualityEquivalenceProven": false,
+  "published": false,
+  "sourceNeuralBackendsPreserved": true,
+  "knownLimits": [
+    "subpixel smooth fixture does not uniformly beat naive blending",
+    "residual occlusion/border artifacts",
+    "coherent fallback can reduce local smoothness",
+    "performance not measured on real GPUs",
+    "store label is not approval",
+    "RAVU trained LGPL LUT retained, not a neural FI model"
+  ]
+}

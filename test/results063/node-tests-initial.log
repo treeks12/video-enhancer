@@ -1,0 +1,44 @@
+
+> node content.js
+[fv-fi] fiSelfCheck OK
+[fv-enhancer] selfCheck OK
+
+> node fi-core.js
+[fv-fi] fiSelfCheck OK
+
+> node test/cadence.cjs
+PASS: interpolation cadence covers 24/30/60 fps, fallbacks, skips, and deadlines
+PASS: neural scheduler preserves inferred phase and drops expired output
+
+> node test/quality.cjs
+PASS: 63488 half patterns, subnormal regressions, phases, dimensions, isolated outliers and thin guide edges
+
+> node test/half-oracle.cjs
+PASS: 100000 independent NumPy float32 -> binary16 oracle cases
+
+> node test/model.cjs
+PASS: model schema/bounds/nonfinite rejection, FiLM math, portable kernel workgroup memory
+
+> node test/model-storage.cjs
+PASS: atomic model storage, binary checksum, schema rejection, download origin and streaming byte limits
+
+> node test/neural-runtime.cjs
+PASS: actual runtime host graph in FP32/FP16, 19 dispatches, resource reuse, alias rejection and failure cleanup (mock GPU, not shader execution)
+
+> node test/neural-lifecycle.cjs
+PASS: snapshot ring, single flight, serial changes, reset, stale-result rejection and destruction (mock GPU)
+
+> node test/neural-init.cjs
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
+
++ undefined
+- 'classic'
+
+    at /mnt/data/ve063/video-enhancer/test/neural-init.cjs:22:184 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: undefined,
+  expected: 'classic',
+  operator: 'strictEqual'
+}

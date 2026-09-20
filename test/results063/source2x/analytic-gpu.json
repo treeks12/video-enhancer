@@ -1,0 +1,495 @@
+{
+  "environment": "llvmpipe (LLVM 19.1.7, 256 bits)",
+  "note": "EGL software renderer, not a browser; no trained model comparison. Synthetic fixtures only.",
+  "source": [
+    256,
+    160
+  ],
+  "motion": [
+    128,
+    80
+  ],
+  "seconds": 4.030245251999986,
+  "rows": [
+    {
+      "scene": "static",
+      "phase": 0.25,
+      "output": {
+        "mae": 0.0001517694181529805,
+        "psnr": 74.44657135009766,
+        "severeFraction": 0.0
+      },
+      "blend": {
+        "mae": 0.0,
+        "psnr": 120.0,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 1.0,
+      "meanFlow": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "scene": "static",
+      "phase": 0.5,
+      "output": {
+        "mae": 0.0001517694181529805,
+        "psnr": 74.44657135009766,
+        "severeFraction": 0.0
+      },
+      "blend": {
+        "mae": 0.0,
+        "psnr": 120.0,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 1.0,
+      "meanFlow": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "scene": "static",
+      "phase": 0.75,
+      "output": {
+        "mae": 0.0001517694181529805,
+        "psnr": 74.44657135009766,
+        "severeFraction": 0.0
+      },
+      "blend": {
+        "mae": 0.0,
+        "psnr": 120.0,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 1.0,
+      "meanFlow": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "scene": "pan",
+      "phase": 0.25,
+      "output": {
+        "mae": 0.002957613905891776,
+        "psnr": 38.66510772705078,
+        "severeFraction": 5.305602716468591e-05
+      },
+      "blend": {
+        "mae": 0.030557245016098022,
+        "psnr": 29.221538543701172,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9427083134651184,
+      "meanFlow": [
+        4.933622360229492,
+        -1.9236716032028198
+      ]
+    },
+    {
+      "scene": "pan",
+      "phase": 0.5,
+      "output": {
+        "mae": 0.0037192099262028933,
+        "psnr": 34.97314453125,
+        "severeFraction": 0.005464770797962649
+      },
+      "blend": {
+        "mae": 0.041059572249650955,
+        "psnr": 26.65406036376953,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9427083134651184,
+      "meanFlow": [
+        4.933622360229492,
+        -1.9236716032028198
+      ]
+    },
+    {
+      "scene": "pan",
+      "phase": 0.75,
+      "output": {
+        "mae": 0.0029015610925853252,
+        "psnr": 38.37761688232422,
+        "severeFraction": 0.0005040322580645161
+      },
+      "blend": {
+        "mae": 0.030536076053977013,
+        "psnr": 29.22472381591797,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9427083134651184,
+      "meanFlow": [
+        4.933622360229492,
+        -1.9236716032028198
+      ]
+    },
+    {
+      "scene": "subpixel",
+      "phase": 0.25,
+      "output": {
+        "mae": 0.0022916081361472607,
+        "psnr": 44.99681854248047,
+        "severeFraction": 0.00010611205432937182
+      },
+      "blend": {
+        "mae": 0.0030344477854669094,
+        "psnr": 49.25550842285156,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 0.921875,
+      "meanFlow": [
+        1.4271876811981201,
+        -0.6616963744163513
+      ]
+    },
+    {
+      "scene": "subpixel",
+      "phase": 0.5,
+      "output": {
+        "mae": 0.003908192738890648,
+        "psnr": 39.12059020996094,
+        "severeFraction": 0.0005570882852292021
+      },
+      "blend": {
+        "mae": 0.004049276001751423,
+        "psnr": 46.750240325927734,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 0.921875,
+      "meanFlow": [
+        1.4271876811981201,
+        -0.6616963744163513
+      ]
+    },
+    {
+      "scene": "subpixel",
+      "phase": 0.75,
+      "output": {
+        "mae": 0.002337871352210641,
+        "psnr": 43.70818328857422,
+        "severeFraction": 0.0003979202037351443
+      },
+      "blend": {
+        "mae": 0.0030349171720445156,
+        "psnr": 49.25487518310547,
+        "severeFraction": 0.0
+      },
+      "sceneCut": false,
+      "supportFraction": 0.921875,
+      "meanFlow": [
+        1.4271876811981201,
+        -0.6616963744163513
+      ]
+    },
+    {
+      "scene": "fast-pan",
+      "phase": 0.25,
+      "output": {
+        "mae": 0.01948210597038269,
+        "psnr": 25.593582153320312,
+        "severeFraction": 0.07372134974533107
+      },
+      "blend": {
+        "mae": 0.11259064823389053,
+        "psnr": 17.718921661376953,
+        "severeFraction": 0.4434422750424448
+      },
+      "sceneCut": false,
+      "supportFraction": 0.7864583134651184,
+      "meanFlow": [
+        12.901991844177246,
+        2.794762372970581
+      ]
+    },
+    {
+      "scene": "fast-pan",
+      "phase": 0.5,
+      "output": {
+        "mae": 0.02678612992167473,
+        "psnr": 22.329471588134766,
+        "severeFraction": 0.09571307300509338
+      },
+      "blend": {
+        "mae": 0.15873776376247406,
+        "psnr": 14.754715919494629,
+        "severeFraction": 0.6519789898132428
+      },
+      "sceneCut": false,
+      "supportFraction": 0.7864583134651184,
+      "meanFlow": [
+        12.901991844177246,
+        2.794762372970581
+      ]
+    },
+    {
+      "scene": "fast-pan",
+      "phase": 0.75,
+      "output": {
+        "mae": 0.018506834283471107,
+        "psnr": 25.92459487915039,
+        "severeFraction": 0.06573641765704584
+      },
+      "blend": {
+        "mae": 0.11263630539178848,
+        "psnr": 17.720787048339844,
+        "severeFraction": 0.44580326825127337
+      },
+      "sceneCut": false,
+      "supportFraction": 0.7864583134651184,
+      "meanFlow": [
+        12.901991844177246,
+        2.794762372970581
+      ]
+    },
+    {
+      "scene": "occlusion",
+      "phase": 0.25,
+      "output": {
+        "mae": 0.005479156505316496,
+        "psnr": 28.148475646972656,
+        "severeFraction": 0.022150891341256366
+      },
+      "blend": {
+        "mae": 0.020517582073807716,
+        "psnr": 25.339561462402344,
+        "severeFraction": 0.056451612903225805
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9114583134651184,
+      "meanFlow": [
+        9.042566299438477,
+        -1.346221923828125
+      ]
+    },
+    {
+      "scene": "occlusion",
+      "phase": 0.5,
+      "output": {
+        "mae": 0.01101604476571083,
+        "psnr": 24.563037872314453,
+        "severeFraction": 0.04424872665534805
+      },
+      "blend": {
+        "mae": 0.028956163674592972,
+        "psnr": 23.068017959594727,
+        "severeFraction": 0.17850700339558573
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9114583134651184,
+      "meanFlow": [
+        9.042566299438477,
+        -1.346221923828125
+      ]
+    },
+    {
+      "scene": "occlusion",
+      "phase": 0.75,
+      "output": {
+        "mae": 0.00509202666580677,
+        "psnr": 28.718860626220703,
+        "severeFraction": 0.021673387096774195
+      },
+      "blend": {
+        "mae": 0.02094060182571411,
+        "psnr": 25.31894874572754,
+        "severeFraction": 0.06183679966044143
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9114583134651184,
+      "meanFlow": [
+        9.042566299438477,
+        -1.346221923828125
+      ]
+    },
+    {
+      "scene": "crossing",
+      "phase": 0.25,
+      "output": {
+        "mae": 0.015667201951146126,
+        "psnr": 23.505828857421875,
+        "severeFraction": 0.05233977079796265
+      },
+      "blend": {
+        "mae": 0.02947770059108734,
+        "psnr": 22.509082794189453,
+        "severeFraction": 0.10831387945670629
+      },
+      "sceneCut": false,
+      "supportFraction": 0.8385416865348816,
+      "meanFlow": [
+        3.84592866897583,
+        -0.07216160744428635
+      ]
+    },
+    {
+      "scene": "crossing",
+      "phase": 0.5,
+      "output": {
+        "mae": 0.01707182079553604,
+        "psnr": 22.000591278076172,
+        "severeFraction": 0.0572474533106961
+      },
+      "blend": {
+        "mae": 0.03804841637611389,
+        "psnr": 21.171091079711914,
+        "severeFraction": 0.21768887945670629
+      },
+      "sceneCut": false,
+      "supportFraction": 0.8385416865348816,
+      "meanFlow": [
+        3.84592866897583,
+        -0.07216160744428635
+      ]
+    },
+    {
+      "scene": "crossing",
+      "phase": 0.75,
+      "output": {
+        "mae": 0.009514860808849335,
+        "psnr": 24.79454803466797,
+        "severeFraction": 0.02891553480475382
+      },
+      "blend": {
+        "mae": 0.02780902199447155,
+        "psnr": 22.80029296875,
+        "severeFraction": 0.07767402376910017
+      },
+      "sceneCut": false,
+      "supportFraction": 0.8385416865348816,
+      "meanFlow": [
+        3.84592866897583,
+        -0.07216160744428635
+      ]
+    },
+    {
+      "scene": "text",
+      "phase": 0.25,
+      "output": {
+        "mae": 0.005528108682483435,
+        "psnr": 28.052452087402344,
+        "severeFraction": 0.022310059422750425
+      },
+      "blend": {
+        "mae": 0.020517582073807716,
+        "psnr": 25.339561462402344,
+        "severeFraction": 0.056451612903225805
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9114583134651184,
+      "meanFlow": [
+        10.059916496276855,
+        -2.4936928749084473
+      ]
+    },
+    {
+      "scene": "text",
+      "phase": 0.5,
+      "output": {
+        "mae": 0.010925966314971447,
+        "psnr": 24.601469039916992,
+        "severeFraction": 0.043850806451612906
+      },
+      "blend": {
+        "mae": 0.028956163674592972,
+        "psnr": 23.068017959594727,
+        "severeFraction": 0.17850700339558573
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9114583134651184,
+      "meanFlow": [
+        10.059916496276855,
+        -2.4936928749084473
+      ]
+    },
+    {
+      "scene": "text",
+      "phase": 0.75,
+      "output": {
+        "mae": 0.005021250806748867,
+        "psnr": 28.754600524902344,
+        "severeFraction": 0.021408106960950763
+      },
+      "blend": {
+        "mae": 0.02094060182571411,
+        "psnr": 25.31894874572754,
+        "severeFraction": 0.06183679966044143
+      },
+      "sceneCut": false,
+      "supportFraction": 0.9114583134651184,
+      "meanFlow": [
+        10.059916496276855,
+        -2.4936928749084473
+      ]
+    },
+    {
+      "scene": "cut",
+      "phase": 0.25,
+      "output": {
+        "mae": 2.4415552616119385e-05,
+        "psnr": 92.24666595458984,
+        "severeFraction": 0.0
+      },
+      "blend": {
+        "mae": 0.20000004768371582,
+        "psnr": 13.979397773742676,
+        "severeFraction": 1.0
+      },
+      "sceneCut": true,
+      "supportFraction": 0.0,
+      "meanFlow": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "scene": "cut",
+      "phase": 0.5,
+      "output": {
+        "mae": 9.763240814208984e-05,
+        "psnr": 80.20812225341797,
+        "severeFraction": 0.0
+      },
+      "blend": {
+        "mae": 0.40000003576278687,
+        "psnr": 7.958800792694092,
+        "severeFraction": 1.0
+      },
+      "sceneCut": true,
+      "supportFraction": 0.0,
+      "meanFlow": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "scene": "cut",
+      "phase": 0.75,
+      "output": {
+        "mae": 9.763240814208984e-05,
+        "psnr": 80.20812225341797,
+        "severeFraction": 0.0
+      },
+      "blend": {
+        "mae": 0.20000004768371582,
+        "psnr": 13.979397773742676,
+        "severeFraction": 1.0
+      },
+      "sceneCut": true,
+      "supportFraction": 0.0,
+      "meanFlow": [
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}
