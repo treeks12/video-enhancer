@@ -4,7 +4,19 @@ const status=$('#status'),details=$('#details'),ifrStatus=$('#ifrStatus'),ifrDet
 const buttons=[...document.querySelectorAll('button')];
 let busy=false;
 function message(el,text,error=false){el.textContent=text;el.dataset.error=String(error);}
-async function modelCall(type,extra={}){const v=await api.runtime.sendMessage({type,...extra});if(!v?.ok)throw new Error(v?.error||'Model service unavailable. Reload the extension.');return v;}
+async function modelCall(type,extra={},retried=false){
+ let v;
+ try{v=await api.runtime.sendMessage({type,...extra});}
+ catch(e){
+  // A sleeping or just-reloaded background can reject the first call with a
+  // dead-channel error; one retry after a beat covers the wake/reload race.
+  const dead=/receiving end does not exist|message channel|context invalidated|extension context/i.test(String(e.message));
+  if(!dead||retried)throw new Error(dead?'The extension background is not responding. Reload the extension (about:debugging → Reload, or the extensions page), reopen this page and try again.':e);
+  await new Promise(r=>setTimeout(r,400));
+  return modelCall(type,extra,true);
+ }
+ if(!v?.ok)throw new Error(v?.error||'Model service unavailable. Reload the extension.');return v;
+}
 async function show(){ // Framegen weights live in storage.local via FiNeuralModel.
  try{const model=await FiNeuralModel.load();
   message(status,'Installed — the Framegen engine is ready.');
