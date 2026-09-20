@@ -28,7 +28,10 @@ async function download(){
   progress={state:'downloading',received:0,total:MODEL.bytes};
   const response=await fetch(MODEL.url,{signal:downloadController.signal,credentials:'omit',referrerPolicy:'no-referrer',cache:'no-store',redirect:'error'});
   if(!response.ok||!response.body)throw new Error('Model download failed: HTTP '+response.status);
-  const len=response.headers.get('content-length');if(len&&Number(len)!==MODEL.bytes)throw new Error('Unexpected model download length.');
+  // Content-Length is deliberately not compared with MODEL.bytes: with a
+  // compressed transfer (CDN sends Content-Encoding) the header describes the
+  // compressed size. Exact size, hash and layout are verified after the body
+  // is fully streamed below.
   const reader=response.body.getReader(),data=new Uint8Array(MODEL.bytes);let at=0;
   while(true){const {done,value}=await reader.read();if(done)break;
    if(at+value.length>data.length){await reader.cancel();throw new Error('Model download exceeds the expected size.');}

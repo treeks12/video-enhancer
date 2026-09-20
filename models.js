@@ -30,7 +30,13 @@ async function ifrShow(){ // IFRNet-S weights live in IndexedDB via the backgrou
  }catch(e){message(ifrStatus,e.message||String(e),true);ifrDetails.textContent='';}}
 async function refresh(){await Promise.all([show(),ifrShow()]);}
 async function run(statusEl,action){if(busy)return;busy=true;buttons.forEach(b=>b.disabled=true);
- try{await action();}catch(e){message(statusEl,e.message||String(e),true);}finally{busy=false;buttons.forEach(b=>b.disabled=false);await refresh();}}
+ let failed=false;
+ try{await action();}
+ catch(e){failed=true;message(statusEl,e.message||String(e),true);}
+ finally{busy=false;buttons.forEach(b=>b.disabled=false);
+  // Keep the error visible: refreshing would immediately overwrite it with
+  // the plain "Not installed" status and hide why the action failed.
+  if(!failed)await refresh();}}
 $('#download').addEventListener('click',()=>{
  if(busy||!$('#consent').checked){message(status,'Read and accept the weights license before downloading.',true);return;}
  // Invoke the permission request directly within the user's click gesture.
