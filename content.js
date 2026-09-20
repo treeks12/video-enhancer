@@ -1079,7 +1079,8 @@ function fiWarmGpu() {
       try { return await FiNeural.create({ profile }); }
       catch (error) { if (generation === fiGpuGeneration) fiNeuralFailure = String(error.message || error); }
     }
-    if (globalThis.VE_BUILD?.personal !== false && requested === "ifrnet" && !fiNeuralFailure) {
+/* PERSONAL_ONLY_END */
+    if (requested === "ifrnet" && !fiNeuralFailure) {
       try {
         const bytes = await VENeuralClient.load();
         if (generation !== fiGpuGeneration || !gl || !currentVideo?.videoWidth) return null;
@@ -1091,7 +1092,6 @@ function fiWarmGpu() {
         return engine;
       } catch (error) { if (generation === fiGpuGeneration) fiNeuralFailure = String(error.message || error); }
     }
-/* PERSONAL_ONLY_END */
     if (generation !== fiGpuGeneration) return null;
     if (requested !== "classic") {
       if (!gl || !currentVideo?.videoWidth) throw new Error("Waiting for a video and WebGL2 context");
@@ -1112,9 +1112,7 @@ function fiWarmGpu() {
     fiGpuError = "";
     engine.whenLost.then(error => {
       if (fiGpuEngine !== engine) return;
-/* PERSONAL_ONLY_BEGIN */
       if (["neural","ifrnet"].includes(engine.kind)) { fiUseClassicFallback(engine, error); return; }
-/* PERSONAL_ONLY_END */
       fiGpuState = "unavailable";
       fiGpuError = String(error.message || error);
       fiMethod = "skip";
@@ -1128,7 +1126,6 @@ function fiWarmGpu() {
   }).finally(() => { if (generation === fiGpuGeneration) fiGpuInit = null; });
 }
 
-/* PERSONAL_ONLY_BEGIN */
 function fiUseClassicFallback(engine, error) {
   if (fiGpuEngine !== engine) return;
   fiNeuralFailure = String(error?.message || error || "Neural processing failed");
@@ -1137,7 +1134,6 @@ function fiUseClassicFallback(engine, error) {
   fiWarmGpu();
 }
 
-/* PERSONAL_ONLY_END */
 function fiReleaseGpu(clearNeuralFailure = true) {
   fiGpuGeneration++;
   fiGpuInit = null;
@@ -1226,7 +1222,6 @@ function fiRequestAnalyticPair() {
   return true;
 }
 
-/* PERSONAL_ONLY_BEGIN */
 function fiRequestIfrPair() {
   const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo;
   const duration=lastVideoFrameDurationMs||1000/((metricReport.videoFps||30)*(video.playbackRate||1));
@@ -1242,8 +1237,6 @@ function fiRequestIfrPair() {
     fiNeuralResult=result;fiGpuReadySerial=serial;fiMethod="ifrnet";fiSkipReason="";
   }).catch(error=>fiUseClassicFallback(engine,error)).finally(()=>{if(fiGpuEngine===engine)fiGpuBusy=false;});return true;
 }
-
-/* PERSONAL_ONLY_END */
 function fiMeasureDisplay() {
   if (fiDisplayRaf !== null) return;
   let previous = null;
@@ -1277,9 +1270,7 @@ function fiRequestGpuPair() {
   if (fiGpuEngine.kind === "neural") return fiRequestNeuralPair();
 /* PERSONAL_ONLY_END */
   if (fiGpuEngine.kind === "analytic") return fiRequestAnalyticPair();
-/* PERSONAL_ONLY_BEGIN */
   if (fiGpuEngine.kind === "ifrnet") return fiRequestIfrPair();
-/* PERSONAL_ONLY_END */
   if (!settings.fiBlockMatch) {
     fiSkipReason = "Motion estimation disabled; showing original frames.";
     return false;
@@ -1591,7 +1582,6 @@ function fiRenderMidToOut(phase) {
         !fiEnsureOut(textureWidth,textureHeight)) return false;
     return fiGpuEngine.render(fiPrevTexture,fiCurrTexture,fiOutTexture,textureWidth,textureHeight,phase,settings.fiDebug);
   }
-/* PERSONAL_ONLY_BEGIN */
   if (fiMethod === "ifrnet") {
     if (!fiHasPrev || !fiHasCurr || fiGpuReadySerial!==fiPairSerial || !fiGpuEngine ||
         !fiEnsureOut(textureWidth,textureHeight)) return false;
@@ -1599,6 +1589,7 @@ function fiRenderMidToOut(phase) {
     return fiGpuEngine.render(fiPrevTexture,fiCurrTexture,fiOutTexture,textureWidth,textureHeight,
       ["off","flow","mask","residual","off"][settings.fiDebug]);
   }
+/* PERSONAL_ONLY_BEGIN */
   if (fiMethod === "neural") {
     const result = fiNeuralResult;
     if (!result || result.serial !== fiPairSerial || fiGpuReadySerial !== fiPairSerial ||
@@ -1695,7 +1686,6 @@ function fiScheduleMidFrame(pairSerial, metadata) {
     if (!canRender() || !settings.fiInfra) return;
     if (pairSerial !== fiPairSerial || !fiHasCurr) return;
     fiDisplayReference = now;
-/* PERSONAL_ONLY_BEGIN */
     if (["neural","ifrnet"].includes(fiGpuEngine?.kind)) {
       const slot = fiNeuralTarget;
       if (!slot || now > slot.expires) { fiSkipReason = "Neural presentation slot expired; keeping the anchor."; return; }
@@ -1707,7 +1697,6 @@ function fiScheduleMidFrame(pairSerial, metadata) {
       catch (error) { fiUseClassicFallback(fiGpuEngine, error); }
       return;
     }
-/* PERSONAL_ONLY_END */
     const phase = typeof fiPresentationPhase === "function"
       ? fiPresentationPhase(now, anchorTime, duration)
       : Math.max(0, Math.min(1, (now - anchorTime) / duration));
@@ -2792,7 +2781,7 @@ function applySettings(value) {
   settings = normalizeSettings(value);
   const engineChanged = settings.fiEngine !== previous.fiEngine ||
     settings.fiProfile !== previous.fiProfile || settings.fiNeuralRevision !== previous.fiNeuralRevision || settings.fiModelRevision !== previous.fiModelRevision;
-  if (engineChanged) {fiAnalyticStep=0;fiAnalyticSlow=0;fiAnalyticRetryAt=0;/* PERSONAL_ONLY_BEGIN */globalThis.VENeuralClient?.clear();/* PERSONAL_ONLY_END */}
+  if (engineChanged) {fiAnalyticStep=0;fiAnalyticSlow=0;fiAnalyticRetryAt=0;globalThis.VENeuralClient?.clear();}
   if ((!settings.fiInfra && previous.fiInfra) || engineChanged) fiReleaseGpu();
   const modeChanged = settings.mode !== previous.mode;
   const qualityChanged = settings.quality !== previous.quality;

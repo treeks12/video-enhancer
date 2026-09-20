@@ -42,7 +42,20 @@ luminance, and the original 2x selection pass is fused with arbitrary-ratio
 RGB recomposition. The unmodified trained LUT is distributed as
 third_party/ravu-lite/ravu-lite-lut3.bin.
 
-Compact neural inference (optional, 0.0.62)
+IFRNet-S neural interpolation (bundled)
+Runtime implementation in neural/ with a WebGL2 inference engine.
+Reference implementation: https://github.com/ltkong218/IFRNet (MIT)
+Reference model port: https://github.com/nihui/ifrnet-ncnn-vulkan (MIT)
+Code notices: neural/LICENSE-IFRNet.txt, neural/LICENSE-ncnn-port.txt.
+Checkpoint identity and provenance: neural/MODEL-CARD.md.
+The IFRNet-S GoPro checkpoint (5,921,992 bytes, git blob
+cae4a9270b508eb0fc51c9570b3fa0c8d7d3c773) is bundled as models/ifrnet.bin
+from the MIT-licensed nihui/ifrnet-ncnn-vulkan repository, pinned at revision
+7e54b1caa8c9f94a052a7148a56a2f57b685609e, and hash-verified on every load.
+Repository code licenses alone are not a certification of every checkpoint,
+training dataset right or downstream distribution.
+
+Optional Framegen backend (personal edition only)
 Graph/layout and selected WGSL kernel equations derived from Framegen v1.4.7,
 commit 83a3e338cb3b9391b05c4d85a5fd8534a8aafa32, copyright (c) 2026 Monzik Allen.
 Code attribution and MIT license: third_party/framegen/LICENSE.
@@ -52,12 +65,3 @@ Optional rt_v7s weights are NOT covered by MIT: see
 third_party/framegen/WEIGHTS_LICENSE.md (personal/noncommercial research only).
 Weights are installed only on explicit user action or by an offline builder.
 
-IFRNet-S optional backend (0.0.63 personal edition)
-The separate 0.0.62 IFRNet-S implementation is preserved in neural/.
-Reference implementation: https://github.com/ltkong218/IFRNet
-Reference model port: https://github.com/nihui/ifrnet-ncnn-vulkan
-Code notices: neural/LICENSE-IFRNet.txt, neural/LICENSE-ncnn-port.txt.
-Checkpoint identity and provenance: neural/MODEL-CARD.md.
-Repository code licenses alone are not a certification of every checkpoint,
-training data right or downstream distribution. No IFRNet checkpoint is bundled.
-The store build excludes this backend and its installer entirely.

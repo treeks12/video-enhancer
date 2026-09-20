@@ -221,16 +221,17 @@ async function init() {
 init().catch(unavailable);
 setInterval(()=>{if(tabId!==undefined&&!controlsLocked&&!pendingUpdates&&!draggingStrength)send("fv-status").then(render).catch(unavailable)},1000);
 
-/* PERSONAL_ONLY_BEGIN */
-// Optional neural installation is absent from store bundles, not merely hidden.
-// Install/remove flows live in models.html (Model setup); the popup only warns.
-if(globalThis.VE_BUILD?.personal !== false){
+// Weight install/remove flows live in models.html (personal edition); the
+// popup only warns when the selected engine has no usable weights.
+{
  const modelInstalled={framegen:null,ifrnet:null};
  function updateModelWarn(){
   const warn=$("#modelWarn");if(!warn)return;
   const engine=fiEngine.value;let text="";
+/* PERSONAL_ONLY_BEGIN */
   if(engine==="neural"&&modelInstalled.framegen===false)text="Framegen weights are not installed — open Model setup to download them, or this engine falls back to classical motion.";
-  else if(engine==="ifrnet"&&modelInstalled.ifrnet===false)text="IFRNet-S weights are not installed — open Model setup to download them, or this engine falls back to classical motion.";
+/* PERSONAL_ONLY_END */
+  if(engine==="ifrnet"&&modelInstalled.ifrnet===false)text="IFRNet-S weights are not available — the engine falls back to Analytic Flow until the extension is reinstalled.";
   warn.hidden=!text;warn.textContent=text;
  }
  async function refreshModels(){
@@ -239,19 +240,19 @@ if(globalThis.VE_BUILD?.personal !== false){
    // Background unavailable: bundled weights are checked directly, same origin.
    try{const probe=await fetch(ext.runtime.getURL("models/ifrnet.bin"),{method:"HEAD"});modelInstalled.ifrnet=probe.ok;}catch{modelInstalled.ifrnet=null;}
   }
+/* PERSONAL_ONLY_BEGIN */
   // "fvNeuralModelV1" mirrors FiNeuralModel.KEY in neural-model.js.
   try{
    const stored=await ext.storage.local.get("fvNeuralModelV1");
    modelInstalled.framegen=!!stored.fvNeuralModelV1;
    if(!modelInstalled.framegen){const probe=await fetch(ext.runtime.getURL("models/rt_v7s.json"),{method:"HEAD"});modelInstalled.framegen=probe.ok;}
   }catch{modelInstalled.framegen=null;}
+/* PERSONAL_ONLY_END */
   updateModelWarn();
  }
  fiEngine.addEventListener("change",updateModelWarn);
  refreshModels();setInterval(refreshModels,5000);
 }
-
-/* PERSONAL_ONLY_END */
 
 $("#saveDiagnostics")?.addEventListener("click",async()=>{
   try{

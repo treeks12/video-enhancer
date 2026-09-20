@@ -15,8 +15,9 @@ for browser in ['firefox','chromium']:
    source=entries['content.js'].decode();a=source.index('const DEFAULT_SETTINGS');b=source.index('// --------------------------------------------------------------------------\n// Shaders',a)
    script=entries['build-flavor.js'].decode()+'\n'+source[a:b]+'''\nconst assert=require('node:assert/strict');
      assert.equal(normalizeSettings({fiEngine:'classic'}).fiEngine,'classic');
-     assert.equal(normalizeSettings({fiEngine:'invalid'}).fiEngine,'analytic');
-     for(const k of ['neural','ifrnet'])assert.equal(normalizeSettings({fiEngine:k}).fiEngine,VE_BUILD.personal?k:'analytic');
+     assert.equal(normalizeSettings({fiEngine:'invalid'}).fiEngine,VE_BUILD.personal?'analytic':'ifrnet');
+     assert.equal(normalizeSettings({fiEngine:'ifrnet'}).fiEngine,'ifrnet');
+     assert.equal(normalizeSettings({fiEngine:'neural'}).fiEngine,VE_BUILD.personal?'neural':'ifrnet');
    '''
    subprocess.run(['node','-e',script],check=True)
    p.write_zip(d/'one.zip',entries);p.write_zip(d/'two.zip',entries);assert (d/'one.zip').read_bytes()==(d/'two.zip').read_bytes()
@@ -25,11 +26,13 @@ for browser in ['firefox','chromium']:
     assert entries[n]==(ROOT/n).read_bytes(),'Optional runtime modified by builder: '+n
   else:
    for script in manifest['content_scripts'][0]['js']:
-    assert not any(t in entries[script] for t in [b'FiNeural.',b'VENeural',b'cdn.jsdelivr.net',b'raw.githubusercontent.com'])
+    assert not any(t in entries[script] for t in [b'FiNeural.',b'cdn.jsdelivr.net',b'raw.githubusercontent.com'])
    assert 'background'not in manifest and 'options_ui'not in manifest and 'optional_host_permissions'not in manifest
-   assert b'value="neural"'not in entries['popup.html'] and b'value="ifrnet"'not in entries['popup.html']
+   assert entries['models/ifrnet.bin']==(ROOT/'models/ifrnet.bin').read_bytes()
+   assert 'neural/background.js' not in entries and not any(n.startswith('third_party/framegen/') for n in entries)
+   assert b'value="neural"'not in entries['popup.html'] and b'value="ifrnet"' in entries['popup.html']
   counts.append({'browser':browser,'edition':flavor,'files':len(entries),'result':'PASS'})
 for invalid in ['/* PERSONAL_ONLY_END */','/* PERSONAL_ONLY_BEGIN */','<!-- PERSONAL_ONLY_BEGIN --><!-- PERSONAL_ONLY_BEGIN --><!-- PERSONAL_ONLY_END -->']:
  try:p.strip_personal(invalid);raise AssertionError('Malformed marker accepted')
  except ValueError:pass
-print(json.dumps({'result':'PASS','cases':counts,'checks':['exact allowlist','no model files or download permissions in store','untrusted stored engine names normalize','runtimes preserved in personal','all shipped JavaScript syntax','byte-reproducible ZIPs','malformed markers fail closed']},indent=2))
+print(json.dumps({'result':'PASS','cases':counts,'checks':['exact allowlist','no framegen runtime, installer or download permissions in store; IFRNet-S bundled','untrusted stored engine names normalize','runtimes preserved in personal','all shipped JavaScript syntax','byte-reproducible ZIPs','malformed markers fail closed']},indent=2))

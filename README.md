@@ -86,8 +86,10 @@ behavior hardware interpolators use for occlusions. Motion vectors are uploaded
 as half-float values instead of 8-bit packed, removing 0.25 px quantization steps
 that made slow pans stutter.
 
-There is no service, native companion, downloaded model, extra permission or browser
-flag required. When WebGPU is unavailable, computation is late, or the display has
+There
+is no service, native companion, runtime download, extra permission or browser
+flag required; the Store edition bundles the MIT-licensed IFRNet-S model natively,
+with Analytic Flow as its fallback engine. When WebGPU is unavailable, computation is late, or the display has
 no useful intermediate slot, the extension shows original frames.
 It does not fall back to simple frame blending. Device loss also falls back to original
 frames. Computation is single-flight and results are checked against the source/pair
