@@ -26,7 +26,7 @@ Se a instalação anterior era a variante IFRNet e usava a chave genérica `neur
 
 ## Instalação e primeira comparação
 
-Desative a versão antiga, extraia o ZIP da edição e do navegador desejados e carregue a pasta como extensão de desenvolvimento. No Firefox, use o carregamento temporário em `about:debugging`; o ZIP não é um XPI assinado. No Chromium, use o modo de desenvolvedor e o carregamento sem compactação. Recarregue a página do vídeo.
+Desative a versão antiga, extraia o ZIP da edição desejada e carregue a pasta como extensão de desenvolvimento. Os manifests agora declaram background duplo (scripts + service_worker), então o mesmo pacote funciona em Firefox e em Chrome/Edge independentemente do sufixo do arquivo. No Firefox, use o carregamento temporário em `about:debugging`; o ZIP não é um XPI assinado. No Chromium, use o modo de desenvolvedor e o carregamento sem compactação. Recarregue a página do vídeo.
 
 Comece com **Original**, **Frame interpolation** habilitado e **Analytic Flow**. Use **Balanced** antes de **High quality**. “Original” significa ausência de upscale espacial, não desligamento da interpolação. Depois reative o upscale preferido.
 

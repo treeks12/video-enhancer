@@ -79,6 +79,7 @@
     "scripts": [
       "neural/model-spec.js",
       "neural/background.js"
-    ]
+    ],
+    "service_worker": "neural/background.js"
   }
 }
