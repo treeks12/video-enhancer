@@ -79,11 +79,11 @@ function renderInterpolation(state) {
     tone = "warn";
     title = "Video processing unavailable";
     status = state.lastError || "Waiting for a video that can be processed.";
-  } else if (enabled && fi.hasPair && /webgpu|ready/.test(backend)) {
+  } else if (enabled && fi.hasPair && /webgpu|ready|ifrnet|neural/.test(backend)) {
     tone = "ok";
     title = "Interpolation active";
     const delay = number(fi.presentationDelayMs, -1);
-    status = delay >= 0 ? `GPU motion · ${delay.toFixed(1)} ms presentation delay` : "GPU motion with one frame of presentation delay";
+    status = delay >= 0 ? `IFRNet-S · ${delay.toFixed(1)} ms presentation delay` : "GPU motion with one frame of presentation delay";
   } else if (enabled) {
     tone = "warn";
     title = "Starting interpolation";
@@ -266,3 +266,4 @@ $("#saveDiagnostics")?.addEventListener("click",async()=>{
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   }catch(error){hint.textContent="Could not export diagnostics: "+error.message;}
 });
+

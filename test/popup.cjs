@@ -11,7 +11,7 @@ function state(overrides = {}) {
     status:"ok",hasVideo:true,visible:true,pipeline:"Native",canvasWidth:1920,canvasHeight:1080,
     settings:{mode:"off",strength:35,quality:"auto",interaction:"balanced",outline:false,compare:false,fiInfra:false,fiSceneCut:true,fiHalfLuma:true,fiBlockMatch:true},
     metrics:{videoFps:30,fps:30,midFps:29.7,renderScale:1,missed:0,missedPct:0,videoDropped:0,videoDroppedPct:0,latePct:0,cpuMs:.5,gpuMs:.7,gpuSupported:true,decoderMs:1.2},
-    fi:{backend:"WebGPU optical flow",computeMs:4.8,presentationDelayMs:33.3,confidence:.74,hasPair:true,sceneCutHold:0,sample:"adaptive 320×180",realPerSec:30,midPerSec:29.7},
+    fi:{backend:"IFRNet-S neural",computeMs:4.8,presentationDelayMs:33.3,confidence:.74,hasPair:true,sceneCutHold:0,sample:"adaptive 320×180",realPerSec:30,midPerSec:29.7},
   };
   return {...base,...overrides,settings:{...base.settings,...overrides.settings},metrics:{...base.metrics,...overrides.metrics},fi:{...base.fi,...overrides.fi}};
 }
@@ -22,7 +22,7 @@ function state(overrides = {}) {
   await page.addInitScript((initial)=>{
     window.__mockState=initial; window.__writes=[]; window.__messages=[];
     globalThis.chrome={
-      runtime:{getManifest:()=>({version:"0.0.60"})},
+      runtime:{getManifest:()=>({version:"0.0.65"})},
       storage:{local:{set:async patch=>{window.__writes.push(structuredClone(patch));Object.assign(window.__mockState.settings,patch)}}},
       tabs:{query:async()=>[{id:7}],reload:async()=>{},sendMessage:async(_id,message)=>{
         window.__messages.push(structuredClone(message));
@@ -56,7 +56,7 @@ function state(overrides = {}) {
   assert.equal(await page.locator("#fiStatusTitle").textContent(),"Motion backend unavailable");
   assert.equal(await page.locator("#fiStatus").getAttribute("data-tone"),"error");
 
-  await page.evaluate(()=>{window.__mockState.fi={backend:"WebGPU optical flow",computeMs:4.8,presentationDelayMs:33.3,confidence:.74,hasPair:true,sceneCutHold:0,sample:"adaptive 320×180",realPerSec:30,midPerSec:29.7};window.__mockState.settings.mode="native"});
+  await page.evaluate(()=>{window.__mockState.fi={backend:"IFRNet-S neural",computeMs:4.8,presentationDelayMs:33.3,confidence:.74,hasPair:true,sceneCutHold:0,sample:"adaptive 320×180",realPerSec:30,midPerSec:29.7};window.__mockState.settings.mode="native"});
   await page.waitForTimeout(1100);
   assert.equal(await page.locator("#fiStatusTitle").textContent(),"Interpolation active");
   await page.locator("body").screenshot({path:screenshot});
