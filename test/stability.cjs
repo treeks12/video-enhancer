@@ -23,7 +23,7 @@ const root = path.resolve(__dirname, '..');
     await page.evaluate(() => {
       window.chrome = { runtime: { onMessage: { addListener() {} } }, storage: {
         onChanged: { addListener() {} }, local: { get: async defaults => ({ ...defaults,
-          mode: 'native', fiInfra: true, interaction: 'quality' }) }
+          mode: 'native', fiInfra: true, fiEngine: 'analytic', interaction: 'quality' }) }
       } };
       const source = document.createElement('canvas');
       source.width = 320; source.height = 180;
@@ -40,7 +40,7 @@ const root = path.resolve(__dirname, '..');
       window.paintTimer = setInterval(paintSource, 1000 / 30);
       video.play();
     });
-    for (const name of ['fi-core.js', 'fi-webgpu.js', 'content.js']) {
+    for (const name of ['feed-session.js', 'fi-quality.js', 'fi-core.js', 'fi-analytic.js', 'fi-webgpu.js', 'content.js']) {
       await page.addScriptTag({ content: fs.readFileSync(path.join(root, name), 'utf8') });
     }
     await page.evaluate(() => {
@@ -69,7 +69,7 @@ const root = path.resolve(__dirname, '..');
     const initial = await page.evaluate(() => ({ draws, status, opacity: video.style.opacity, fi: snapshot().fi }));
     assert.equal(initial.status, 'ok');
     assert.equal(initial.opacity, '');
-    assert.ok(initial.draws.block >= 5, JSON.stringify(initial));
+    assert.ok(initial.draws.mid >= 5, JSON.stringify(initial));
     console.log('PASS: moving video produces distinct motion-compensated midpoint pixels', initial.draws);
 
     // A missed callback holds the delayed clock and skips only that interpolation.
