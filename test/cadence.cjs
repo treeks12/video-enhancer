@@ -138,6 +138,8 @@ const schedulerHarness = loadFunctions(`${coreSource}\n${contentSource}`, [
   let fiPairSerial = 1;
   let fiMethod = 'webgpu';
   let fiGpuEngine = {kind: 'classic'};
+  let feedSessionId = 0;
+  const isCurrentFeedSession = () => true;
   let fiNeuralTarget = null, fiNeuralResult = null, fiDisplayReference = 0;
   let fiGpuReadySerial = 1;
   let fiHasCurr = true;

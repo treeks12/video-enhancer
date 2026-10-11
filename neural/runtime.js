@@ -8,7 +8,7 @@ class Runtime {
   this.gl=gl;this.model=model;this.dimensions=dimensions;this.busy=false;this.destroyed=false;
   this.lastSerial=-1;this.lastSlot=0;this.epoch=0;
   this.textures=new Set();this.programs=new Map();this.layers=new Map();this.memoryBytes=0;
-  this.fbo=gl.createFramebuffer();this.vao=gl.createVertexArray();this.sync=null;
+  this.fbo=gl.createFramebuffer();this.vao=gl.createVertexArray();this.syncs=new Set();
   this.khr=gl.getExtension('KHR_parallel_shader_compile');
  }
  static async create(gl,bytes,width,height,profile='balanced',step=0,signal=null){
@@ -99,10 +99,10 @@ class Runtime {
    gl.drawArrays(gl.TRIANGLES,0,3);
   }
  }
- async estimate(prev,curr,serial,phase=.5){
+  async estimate(prev,curr,serial,phase=.5){
   if(this.busy)return null;
   if(this.destroyed||this.gl.isContextLost())throw new Error('Neural context lost.');
-  this.busy=true;const gl=this.gl,start=performance.now(),epoch=this.epoch;
+  this.busy=true;const gl=this.gl,start=performance.now(),epoch=this.epoch;let sync=null;
   try{
    const reuse=this.lastSerial===serial-1,prevSlot=reuse?this.lastSlot:0,currSlot=1-prevSlot;
    if(!reuse)this.run(this.enc[prevSlot].graph,prev);
@@ -113,11 +113,13 @@ class Runtime {
    this.bind(this.statsProgram,'prev',prev,0);this.bind(this.statsProgram,'curr',curr,1);gl.drawArrays(gl.TRIANGLES,0,3);
    this.lastSerial=serial;this.lastSlot=currSlot;
    const submitMs=performance.now()-start;
-   this.sync=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);if(!this.sync)throw new Error('GPU fence creation failed.');
-   gl.flush();gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+   sync=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);if(!sync)throw new Error('GPU fence creation failed.');
+   this.syncs.add(sync);gl.flush();gl.bindFramebuffer(gl.FRAMEBUFFER,null);
    while(true){
-    if(this.destroyed||gl.isContextLost())throw new Error('Neural inference cancelled.');
-    const wait=gl.clientWaitSync(this.sync,0,0);
+    // reset() is the feed-session cancellation boundary. Do not wait for an
+    // obsolete source to finish before the new source can submit a pair.
+    if(this.destroyed||this.epoch!==epoch||gl.isContextLost())return null;
+    const wait=gl.clientWaitSync(sync,0,0);
     if(wait===gl.WAIT_FAILED)throw new Error('Neural GPU fence failed.');
     if(wait!==gl.TIMEOUT_EXPIRED)break;
     if(performance.now()-start>4000)throw new Error('Neural inference exceeded the safety timeout.');
@@ -131,7 +133,7 @@ class Runtime {
    return {serial,epoch,phase,elapsedMs:performance.now()-start,submitMs,reusedEncoder:reuse,
     sceneCut:stats[0]>.11&&stats[1]>.35,stats:Array.from(stats),valid:epoch===this.epoch};
   }finally{
-   if(this.sync){gl.deleteSync(this.sync);this.sync=null;}this.busy=false;
+   if(sync){gl.deleteSync(sync);this.syncs.delete(sync);}this.busy=false;
   }
  }
  render(prev,curr,target,w,h,debug='off'){
@@ -146,7 +148,7 @@ class Runtime {
  }
  destroy(){
   if(this.destroyed)return;this.destroyed=true;this.reset();const gl=this.gl;
-  if(this.sync){gl.deleteSync(this.sync);this.sync=null;}
+  for(const sync of this.syncs)gl.deleteSync(sync);this.syncs.clear();
   for(const t of this.textures)gl.deleteTexture(t);for(const p of this.programs.values())gl.deleteProgram(p.program);
   gl.deleteFramebuffer(this.fbo);gl.deleteVertexArray(this.vao);this.textures.clear();this.programs.clear();this.layers.clear();
  }

@@ -9,6 +9,7 @@ function context(){
  let resolve,reject,calls=0,rebuilds=0;
  const engine={estimate:()=>{calls++;return new Promise((r,j)=>{resolve=r;reject=j;});},destroy(){this.dead=true;}};
  let fiGpuEngine=engine,fiPairSerial=1,currentVideo={playbackRate:1},fiHasPrev=true,fiPairDiscontinuous=false,settings={fiBlockMatch:true,fiInfra:true,fiSceneCut:true};
+ let feedSessionId=0; const isCurrentFeedSession=(video,session)=>video===currentVideo && (!session || session===feedSessionId);
  let fiGpuBusy=false,lastVideoFrameDurationMs=33.333,metricReport={videoFps:30},fiDisplayPeriod=16.667;
  let fiAnalyticRetryAt=0,fiMethod='skip',fiSkipReason='',fiGpuElapsedMs=0,fiAnalyticSlow=0,fiAnalyticStep=0,fiAnalyticLate=0,fiConfidence=0,fiGpuReadySerial=-1,fiGpuError='',fiGpuState='ready';
  const fiPrevTexture={},fiCurrTexture={},canRender=()=>true;

@@ -53,6 +53,7 @@
       ],
       "js": [
         "build-flavor.js",
+        "feed-session.js",
         "fi-analytic.js",
         "fi-quality.js",
         "fi-core.js",

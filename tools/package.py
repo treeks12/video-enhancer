@@ -8,7 +8,7 @@ store artifact, not runtime-hidden.
 from pathlib import Path
 import argparse, copy, hashlib, json, re, zipfile
 ROOT = Path(__file__).resolve().parents[1]
-COMMON = ['build-flavor.js','content.js','fi-analytic.js','fi-quality.js','fi-core.js',
+COMMON = ['build-flavor.js','feed-session.js','content.js','fi-analytic.js','fi-quality.js','fi-core.js',
           'fi-webgpu.js','popup.html','popup.js','THIRD_PARTY_NOTICES.txt','LICENSE-ANALYTIC.txt']
 # IFRNet-S runtime + attribution ship in both editions; the checkpoint is bundled.
 IFRNET = ['neural/model-spec.js','neural/graph.js','neural/runtime.js','neural/client.js',

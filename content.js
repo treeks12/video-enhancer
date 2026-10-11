@@ -384,6 +384,9 @@ let gpuFrame = 0;
 let cpuFrame = 0;
 let gpuTimingUntil = 0;
 let currentVideo = null;
+let feedSessionManager = null;
+let activeFeedSession = null;
+let feedSessionId = 0;
 let blockedVideo = null;
 let frameWatchdog = null;
 let useAnimationFallback = false;
@@ -501,6 +504,41 @@ let fiSkipReason = ""; // why mid was not presented (smoothness)
 
 function log(...args) {
   console.log(TAG, ...args);
+}
+
+function ensureFeedSessionManager() {
+  if (!feedSessionManager && typeof VEFeedSessionManager === "function") {
+    feedSessionManager = new VEFeedSessionManager();
+  }
+  return feedSessionManager;
+}
+
+function beginFeedSession(video, { force = false, reason = "source changed" } = {}) {
+  const manager = ensureFeedSessionManager();
+  if (manager) {
+    activeFeedSession = manager.ensure(video, { force, reason });
+    feedSessionId = activeFeedSession?.id || 0;
+  } else {
+    // Self-checks execute content.js without the browser's script bundle.
+    feedSessionId++;
+    activeFeedSession = { id: feedSessionId, video, active: true };
+  }
+  return activeFeedSession;
+}
+
+function retireFeedSession(reason = "no active video") {
+  feedSessionManager?.retire(reason);
+  activeFeedSession = null;
+  feedSessionId = 0;
+}
+
+function isCurrentFeedSession(video, id = feedSessionId) {
+  if (!video || video !== currentVideo) return false;
+  // Unit harnesses call controller functions without loading feed-session.js;
+  // production callbacks always carry a non-zero session id.
+  if (!id) return true;
+  if (id !== feedSessionId) return false;
+  return feedSessionManager ? feedSessionManager.isCurrent(activeFeedSession, video) : true;
 }
 
 function canRender() {
@@ -1126,8 +1164,8 @@ function fiWarmGpu() {
   }).finally(() => { if (generation === fiGpuGeneration) fiGpuInit = null; });
 }
 
-function fiUseClassicFallback(engine, error) {
-  if (fiGpuEngine !== engine) return;
+function fiUseClassicFallback(engine, error, session = feedSessionId) {
+  if (fiGpuEngine !== engine || (session && session !== feedSessionId)) return;
   fiNeuralFailure = String(error?.message || error || "Neural processing failed");
   fiReleaseGpu(false);
   fiSkipReason = "Optional neural backend unavailable; using Analytic Flow. " + fiNeuralFailure;
@@ -1153,7 +1191,8 @@ function fiReleaseGpu(clearNeuralFailure = true) {
 
 /* PERSONAL_ONLY_BEGIN */
 function fiRequestNeuralPair() {
-  const engine = fiGpuEngine, serial = fiPairSerial, video = currentVideo;
+  const engine = fiGpuEngine, serial = fiPairSerial, video = currentVideo,
+    session = typeof feedSessionId === "number" ? feedSessionId : 0;
   fiNeuralResult = fiNeuralTarget = null;
   const duration = lastVideoFrameDurationMs || 1000 / ((metricReport.videoFps || 30) * (video.playbackRate || 1));
   const slot = FiQuality.neuralSlot(fiPairAnchorTime, duration, fiDisplayPeriod,
@@ -1163,13 +1202,14 @@ function fiRequestNeuralPair() {
     fiIsSceneCut(fiSceneCutScore(fiPrevLuma, fiCurrLuma)) &&
     fiSceneDistributionChange(fiPrevLuma, fiCurrLuma) > .35);
   const skip = !fiHasPrev || !hasLumaPair || fiPairDiscontinuous || cut || !slot || !settings.fiBlockMatch;
-  const valid = () => fiGpuEngine === engine && serial === fiPairSerial && video === currentVideo &&
+  const valid = () => fiGpuEngine === engine && serial === fiPairSerial &&
+    isCurrentFeedSession(video, session) &&
     settings.fiInfra && canRender() && slot && performance.now() <= slot.expires;
   let work;
   try {
     // submit snapshots the video synchronously, even when a pair will be skipped.
     work = engine.submit(video, { serial, phase: slot?.phase || .5, skip, valid, debug: settings.fiDebug });
-  } catch (error) { fiUseClassicFallback(engine, error); return false; }
+  } catch (error) { fiUseClassicFallback(engine, error, session); return false; }
   if (!work) {
     fiSkipReason = cut ? "Scene cut; keeping original anchors." : skip ?
       "No safe extra-frame slot; keeping original anchors." : "Neural buffering or busy; keeping original anchors.";
@@ -1180,14 +1220,14 @@ function fiRequestNeuralPair() {
   fiMethod = "pending";
   fiSkipReason = "Reconstructing with the compact neural network.";
   work.then(result => {
-    if (fiGpuEngine !== engine || serial !== fiPairSerial || video !== currentVideo) return;
+    if (fiGpuEngine !== engine || serial !== fiPairSerial || !isCurrentFeedSession(video, session)) return;
     fiGpuElapsedMs = engine.stats.ms;
     if (!result || !valid()) { fiMethod = "skip"; fiSkipReason = "Neural frame missed its slot; preserving source cadence."; return; }
     fiNeuralResult = result;
     fiGpuReadySerial = serial;
     fiMethod = "neural";
     fiSkipReason = "";
-  }).catch(error => fiUseClassicFallback(engine, error)).finally(() => {
+  }).catch(error => fiUseClassicFallback(engine, error, session)).finally(() => {
     if (fiGpuEngine === engine) fiGpuBusy = false;
   });
   return true;
@@ -1195,14 +1235,15 @@ function fiRequestNeuralPair() {
 
 /* PERSONAL_ONLY_END */
 function fiRequestAnalyticPair() {
-  const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo;
+  const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo,
+    session=typeof feedSessionId === "number" ? feedSessionId : 0;
   if (!fiHasPrev || fiPairDiscontinuous || !settings.fiBlockMatch || fiGpuBusy) return false;
   if(performance.now()<fiAnalyticRetryAt){fiSkipReason="Analytic cooldown after sustained overload; preserving source frames.";return false;}
   const duration=lastVideoFrameDurationMs || 1000/((metricReport.videoFps||30)*(video.playbackRate||1));
   if (duration<fiDisplayPeriod*1.45) {fiSkipReason="No additional display slot; preserving the source cadence.";return false;}
   fiGpuBusy=true;fiMethod="pending";fiSkipReason="Estimating bidirectional motion on the GPU.";
   engine.estimate(fiPrevTexture,fiCurrTexture,serial).then(result=>{
-    if(fiGpuEngine!==engine || video!==currentVideo || !settings.fiInfra || !canRender())return;
+    if(fiGpuEngine!==engine || !isCurrentFeedSession(video, session) || !settings.fiInfra || !canRender())return;
     fiGpuElapsedMs=result?.elapsedMs||0;
     fiAnalyticSlow=fiGpuElapsedMs>duration*.8 ? fiAnalyticSlow+1 : 0;
     // Reduce inference work only between pairs; never mutate active textures.
@@ -1223,19 +1264,20 @@ function fiRequestAnalyticPair() {
 }
 
 function fiRequestIfrPair() {
-  const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo;
+  const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo,
+    session=typeof feedSessionId === "number" ? feedSessionId : 0;
   const duration=lastVideoFrameDurationMs||1000/((metricReport.videoFps||30)*(video.playbackRate||1));
   const slot=FiQuality.neuralSlot(fiPairAnchorTime,duration,fiDisplayPeriod,fiDisplayReference||fiPairAnchorTime);
   fiNeuralResult=fiNeuralTarget=null;
   if(!slot||!fiHasPrev||fiPairDiscontinuous||fiGpuBusy||!settings.fiBlockMatch)return false;
   fiNeuralTarget=slot;fiGpuBusy=true;fiMethod="pending";
   engine.estimate(fiPrevTexture,fiCurrTexture,serial,slot.phase).then(result=>{
-    if(fiGpuEngine!==engine||video!==currentVideo||serial!==fiPairSerial||!settings.fiInfra||!canRender())return;
+    if(fiGpuEngine!==engine||!isCurrentFeedSession(video, session)||serial!==fiPairSerial||!settings.fiInfra||!canRender())return;
     fiGpuElapsedMs=result?.elapsedMs||0;engine.stats.ms=fiGpuElapsedMs;engine.stats.completed++;
     if(!result?.valid||performance.now()>slot.expires){engine.stats.late++;fiMethod="skip";return;}
     if(settings.fiSceneCut&&result.sceneCut){fiMethod="skip";fiSkipReason="Scene cut; keeping original anchors.";return;}
     fiNeuralResult=result;fiGpuReadySerial=serial;fiMethod="ifrnet";fiSkipReason="";
-  }).catch(error=>fiUseClassicFallback(engine,error)).finally(()=>{if(fiGpuEngine===engine)fiGpuBusy=false;});return true;
+  }).catch(error=>fiUseClassicFallback(engine,error,session)).finally(()=>{if(fiGpuEngine===engine)fiGpuBusy=false;});return true;
 }
 function fiMeasureDisplay() {
   if (fiDisplayRaf !== null) return;
@@ -1672,6 +1714,8 @@ function fiAfterVideoUpload(video) {
 function fiScheduleMidFrame(pairSerial, metadata) {
   cancelFiMid();
   if (!canRender()) return;
+  const session = typeof feedSessionId === "number" ? feedSessionId : 0;
+  const video = currentVideo;
   const fps = metricReport.videoFps > 0 ? metricReport.videoFps : 30;
   const rate = currentVideo && Number(currentVideo.playbackRate) > 0
     ? Number(currentVideo.playbackRate)
@@ -1683,7 +1727,7 @@ function fiScheduleMidFrame(pairSerial, metadata) {
 
   const present = (now) => {
     fiMidRaf = null;
-    if (!canRender() || !settings.fiInfra) return;
+    if (!canRender() || !settings.fiInfra || !isCurrentFeedSession(video, session)) return;
     if (pairSerial !== fiPairSerial || !fiHasCurr) return;
     fiDisplayReference = now;
     if (["neural","ifrnet"].includes(fiGpuEngine?.kind)) {
@@ -2043,6 +2087,7 @@ function deactivateRenderer() {
   removeCompareLabels();
   if (videoResizeObserver) videoResizeObserver.disconnect();
   if (videoIntersectionObserver) videoIntersectionObserver.disconnect();
+  retireFeedSession("renderer deactivated");
   currentVideo = null;
   videoInViewport = true;
   if (canvas && canvas.parentNode) canvas.remove();
@@ -2446,12 +2491,13 @@ function draw(options = {}) {
 // Loop de frames
 // --------------------------------------------------------------------------
 
-function onFrame(now, metadata) {
+function onFrame(now, metadata, callbackVideo = null, callbackSession = 0) {
+  const videoForCallback = callbackVideo || currentVideo;
+  if (stopped || !isCurrentFeedSession(videoForCallback, callbackSession)) return;
   if (frameWatchdog !== null) clearTimeout(frameWatchdog);
   frameWatchdog = null;
   rafId = null;
   scheduledKind = null;
-  if (stopped) return;
   const freshFrame = recordVideoFrame(now, metadata);
   fiPairDiscontinuous = fiResumeGap;
   if (fiResumeGap) {
@@ -2461,6 +2507,7 @@ function onFrame(now, metadata) {
   if (!currentVideo || !document.body.contains(currentVideo)) {
     if (videoResizeObserver) videoResizeObserver.disconnect();
     if (videoIntersectionObserver) videoIntersectionObserver.disconnect();
+    retireFeedSession("video element removed");
     currentVideo = null;
     hideCanvas();
     rescan();
@@ -2490,21 +2537,23 @@ function frameSchedulerKind(fiEnabled, hasVideoFrameCallback) {
 
 function schedule() {
   if (stopped || rafId !== null || !currentVideo || !canRender()) return;
+  const video = currentVideo;
+  const session = feedSessionId;
+  const callback = (now, metadata) => onFrame(now, metadata, video, session);
   if (scrolling && settings.interaction === "balanced") {
     scheduledKind = "timeout";
     rafId = setTimeout(() => {
-      onFrame(performance.now(), null);
+      callback(performance.now(), null);
     }, INTERACTION_PREVIEW_MS);
     return;
   }
   if (frameSchedulerKind(settings.fiInfra,
       !useAnimationFallback && typeof currentVideo.requestVideoFrameCallback === "function") === "video") {
     scheduledKind = "video";
-    rafId = currentVideo.requestVideoFrameCallback(onFrame);
-    const video = currentVideo;
+    rafId = currentVideo.requestVideoFrameCallback(callback);
     frameWatchdog = setTimeout(() => {
       frameWatchdog = null;
-      if (video !== currentVideo || video.paused || video.ended || !canRender()) return;
+      if (!isCurrentFeedSession(video, session) || video.paused || video.ended || !canRender()) return;
       cancelScheduledFrame(video);
       useAnimationFallback = true;
       resetVideoFrameHistory();
@@ -2515,7 +2564,7 @@ function schedule() {
     }, Math.max(500, lastVideoFrameDurationMs * 4));
   } else {
     scheduledKind = "animation";
-    rafId = requestAnimationFrame(onFrame);
+    rafId = requestAnimationFrame(now => callback(now, null));
   }
 }
 
@@ -2624,6 +2673,10 @@ function handleVideoReset(event) {
   if (!currentVideo || event.target !== currentVideo) return;
   cancelScheduledFrame();
   invalidateRavuRetry();
+  beginFeedSession(currentVideo, {
+    force: event.type === "emptied" || event.type === "loadedmetadata",
+    reason: event.type,
+  });
   resetFiPairState();
   resetVideoFrameHistory();
   useAnimationFallback = false;
@@ -2657,6 +2710,7 @@ function attachDiscoveryListeners() {
   document.addEventListener("play", handleVideoDiscovery, true);
   document.addEventListener("loadedmetadata", handleVideoDiscovery, true);
   document.addEventListener("emptied", handleVideoDiscovery, true);
+  document.addEventListener("durationchange", handleVideoDiscovery, true);
   // rVFC does not fire while paused: capture on pause/end/current-time changes.
   document.addEventListener("pause", handleStillFrame, true);
   document.addEventListener("ended", handleStillFrame, true);
@@ -2673,6 +2727,7 @@ function detachDiscoveryListeners() {
   document.removeEventListener("play", handleVideoDiscovery, true);
   document.removeEventListener("loadedmetadata", handleVideoDiscovery, true);
   document.removeEventListener("emptied", handleVideoDiscovery, true);
+  document.removeEventListener("durationchange", handleVideoDiscovery, true);
   document.removeEventListener("pause", handleStillFrame, true);
   document.removeEventListener("ended", handleStillFrame, true);
   document.removeEventListener("seeked", handleStillFrame, true);
@@ -2717,6 +2772,7 @@ function rescan() {
     if (videoResizeObserver) videoResizeObserver.disconnect();
     if (videoIntersectionObserver) videoIntersectionObserver.disconnect();
     detachActivePageListeners();
+    retireFeedSession();
     currentVideo = null;
     if (status !== "no-video") {
       status = "no-video";
@@ -2734,9 +2790,18 @@ function rescan() {
     }
     return;
   }
-  if (next && next !== currentVideo) {
+  const reusedVideoSourceChanged = Boolean(
+    next && next === currentVideo && activeFeedSession &&
+    typeof VEFeedSourceKey === "function" &&
+    VEFeedSourceKey(next) !== activeFeedSession.key,
+  );
+  if (next && (next !== currentVideo || reusedVideoSourceChanged)) {
     cancelScheduledFrame();
     ravuPendingCaptureVideo = null;
+    beginFeedSession(next, {
+      force: reusedVideoSourceChanged,
+      reason: reusedVideoSourceChanged ? "video source changed" : "video element changed",
+    });
     resetVideoFrameHistory();
     if (settings.quality === "auto") {
       renderScale = 1;
@@ -2895,6 +2960,7 @@ function snapshot() {
       : "display refresh",
     settings: { ...settings },
     metrics: { ...metricReport, gpuSupported: Boolean(timerExt) },
+    feed: feedSessionManager?.snapshot?.() || (currentVideo ? { id: feedSessionId, active: true } : null),
     fi: {
       presentationDelayMs: fiLatencyActive ? lastVideoFrameDurationMs : 0,
       backend: fiGpuState === "ready" ? ({neural:"Framegen compact neural (WebGPU)",ifrnet:"IFRNet-S neural (WebGL2)",analytic:"Analytic Flow (WebGL2; no neural weights)",classic:"Legacy LK (WebGPU)"}[fiGpuEngine?.kind]||"Preparing") : fiGpuState,
@@ -2986,6 +3052,7 @@ function stop() {
   if (scrollResumeTimer !== null) clearTimeout(scrollResumeTimer);
   if (videoResizeObserver) videoResizeObserver.disconnect();
   if (videoIntersectionObserver) videoIntersectionObserver.disconnect();
+  retireFeedSession("content script stopped");
   hideCanvas();
 }
 

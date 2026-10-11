@@ -7,6 +7,12 @@ Make video look smoother and sharper directly in your browser. Video Enhancer ca
 - **Local and private:** frames stay in the browser; no video upload, telemetry, or remote processing.
 - **Simple:** install the extension, open a video, and enable the controls from the popup.
 
+Feed navigation is handled as a continuous compositor. Each video source gets
+its own session, stale frame callbacks and neural results are rejected when a
+feed reuses or replaces a `<video>` element, and the current source frame is
+rendered immediately while the next interpolation pair is prepared. Spatial
+enhancement remains active during that handoff.
+
 IFRNet-S is the default interpolation engine in the Store build, with Analytic Flow as an automatic fallback when the neural model cannot run. The result depends on the browser, GPU, source video and motion complexity. Occlusions, scene cuts and very fast movement can still produce artifacts; the extension bypasses uncertain pairs instead of freezing the playback clock.
 
 [Install for Firefox](https://addons.mozilla.org/en-US/firefox/addon/video-enhancer-for-firefox/) · [Download releases](https://github.com/treeks12/video-enhancer/releases) · [Project website](https://treeks12.github.io/video-enhancer/)
