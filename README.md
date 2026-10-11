@@ -1,4 +1,4 @@
-# Video Enhancer
+# Video Enhancer — Sharper Video & Smoother Motion
 
 Make video look smoother and sharper directly in your browser. Video Enhancer can generate an intermediate frame between source frames for **up to 2× the displayed frame rate**, while local WebGL/WebGPU processing improves detail and perceived clarity.
 

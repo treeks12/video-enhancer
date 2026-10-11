@@ -22,7 +22,7 @@ function state(overrides = {}) {
   await page.addInitScript((initial)=>{
     window.__mockState=initial; window.__writes=[]; window.__messages=[];
     globalThis.chrome={
-      runtime:{getManifest:()=>({version:"0.0.65"})},
+      runtime:{getManifest:()=>({version:"0.0.66"})},
       storage:{local:{set:async patch=>{window.__writes.push(structuredClone(patch));Object.assign(window.__mockState.settings,patch)}}},
       tabs:{query:async()=>[{id:7}],reload:async()=>{},sendMessage:async(_id,message)=>{
         window.__messages.push(structuredClone(message));
