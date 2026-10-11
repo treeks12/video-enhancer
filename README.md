@@ -1,6 +1,19 @@
-# Current development delivery: 0.0.63
+# Video Enhancer
 
-See **[LEIA-0.0.63.md](LEIA-0.0.63.md)** for the Store/Personal build split, independent Analytic Flow backend, preserved optional neural models and measured limitations. The historical README below describes earlier versions; do not use its old build commands for 0.0.63.
+Make video look smoother and sharper directly in your browser. Video Enhancer can generate an intermediate frame between source frames for **up to 2× the displayed frame rate**, while local WebGL/WebGPU processing improves detail and perceived clarity.
+
+- **Smoother motion:** GPU frame interpolation for 24/30 fps sources, with a stable one-frame presentation delay.
+- **Sharper image:** choose Original, FSR1, or RAVU-lite with adjustable RCAS sharpening.
+- **Local and private:** frames stay in the browser; no video upload, telemetry, or remote processing.
+- **Simple:** install the extension, open a video, and enable the controls from the popup.
+
+The result depends on the browser, GPU, source video and motion complexity. Occlusions, scene cuts and very fast movement can still produce artifacts; the extension bypasses uncertain pairs instead of freezing the playback clock.
+
+[Install for Firefox](https://addons.mozilla.org/en-US/firefox/addon/video-enhancer-for-firefox/) · [Download releases](https://github.com/treeks12/video-enhancer/releases) · [Project website](https://treeks12.github.io/video-enhancer/)
+
+## 0.0.64
+
+This release promotes interpolation to the main popup, keeps upscaling first in the control hierarchy, improves diagonal/occlusion motion estimation, and ships the IFRNet-S neural engine in the Store build.
 
 ---
 

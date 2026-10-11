@@ -3,7 +3,7 @@
     "message": "Video Enhancer"
   },
   "extensionDescription": {
-    "message": "Local GPU motion interpolation, with optional FSR1, RAVU-lite and RCAS image enhancement."
+    "message": "Up to 2× smoother motion and sharper video using local GPU interpolation, FSR1, RAVU-lite and RCAS enhancement."
   },
   "statusChecking": {
     "message": "Checking…"
