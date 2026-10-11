@@ -2552,8 +2552,8 @@ function schedule() {
     scheduledKind = "video";
     rafId = currentVideo.requestVideoFrameCallback(callback);
     frameWatchdog = setTimeout(() => {
-      frameWatchdog = null;
       if (!isCurrentFeedSession(video, session) || video.paused || video.ended || !canRender()) return;
+      frameWatchdog = null;
       cancelScheduledFrame(video);
       useAnimationFallback = true;
       resetVideoFrameHistory();
@@ -3029,7 +3029,13 @@ function suspendOverlayForInteraction() {
     updateCanvasVisibility();
     schedule();
   }
-  scrollResumeTimer = setTimeout(() => {
+  const session = feedSessionId;
+  let resumeTimer = null;
+  resumeTimer = setTimeout(() => {
+    if (session && session !== feedSessionId) {
+      if (scrollResumeTimer === resumeTimer) scrollResumeTimer = null;
+      return;
+    }
     scrollResumeTimer = null;
     scrolling = false;
     layoutDirty = true;
@@ -3039,6 +3045,7 @@ function suspendOverlayForInteraction() {
     updateCanvasVisibility();
     schedule();
   }, INTERACTION_PAUSE_MS);
+  scrollResumeTimer = resumeTimer;
 }
 
 function stop() {
