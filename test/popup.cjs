@@ -53,7 +53,7 @@ function state(overrides = {}) {
 
   await page.evaluate(()=>{window.__mockState.fi={backend:"failed",backendError:"No WebGPU adapter",hasPair:false};window.__mockState.settings.fiInfra=true});
   await page.waitForTimeout(1100);
-  assert.equal(await page.locator("#fiStatusTitle").textContent(),"WebGPU unavailable");
+  assert.equal(await page.locator("#fiStatusTitle").textContent(),"Motion backend unavailable");
   assert.equal(await page.locator("#fiStatus").getAttribute("data-tone"),"error");
 
   await page.evaluate(()=>{window.__mockState.fi={backend:"WebGPU optical flow",computeMs:4.8,presentationDelayMs:33.3,confidence:.74,hasPair:true,sceneCutHold:0,sample:"adaptive 320×180",realPerSec:30,midPerSec:29.7};window.__mockState.settings.mode="native"});
@@ -69,3 +69,4 @@ function state(overrides = {}) {
   console.log(`popup tests passed; screenshot: ${screenshot}`);
   await browser.close();
 })().catch(error=>{console.error(error);process.exitCode=1});
+
