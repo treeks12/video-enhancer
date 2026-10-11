@@ -12,7 +12,7 @@ for browser in ['firefox','chromium']:
    for n,v in entries.items():(d/n).parent.mkdir(parents=True,exist_ok=True);(d/n).write_bytes(v)
    for n in entries:
     if n.endswith('.js'):subprocess.run(['node','--check',str(d/n)],check=True)
-   source=entries['content.js'].decode();a=source.index('const DEFAULT_SETTINGS');b=source.index('// --------------------------------------------------------------------------\n// Shaders',a)
+   source=entries['content.js'].decode();a=source.index('const DEFAULT_SETTINGS');b=source.index('// Shaders',a)
    script=entries['build-flavor.js'].decode()+'\n'+source[a:b]+'''\nconst assert=require('node:assert/strict');
      assert.equal(normalizeSettings({fiEngine:'classic'}).fiEngine,'classic');
      assert.equal(normalizeSettings({fiEngine:'invalid'}).fiEngine,'ifrnet');

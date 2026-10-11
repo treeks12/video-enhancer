@@ -93,7 +93,7 @@ function normalizeSettings(value = {}) {
       ? value.interaction
       : DEFAULT_SETTINGS.interaction,
     ...fi,
-    fiEngine: ((globalThis.VE_BUILD?.personal !== false ? ["analytic","classic","neural","ifrnet"] : ["analytic","classic"]).includes(value.fiEngine)) ? value.fiEngine : "analytic",
+    fiEngine: ((globalThis.VE_BUILD?.personal !== false ? ["analytic","classic","neural","ifrnet"] : ["analytic","classic"]).includes(value.fiEngine)) ? value.fiEngine : "ifrnet",
     fiModelRevision: typeof value.fiModelRevision === "string" ? value.fiModelRevision : "",
     fiProfile: value.fiProfile === "quality" ? "quality" : "balanced",
     fiDebug: [0, 1, 2, 3, 4].includes(Number(value.fiDebug)) ? Number(value.fiDebug) : 0,

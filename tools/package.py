@@ -61,7 +61,7 @@ def entries_for(browser: str, flavor: str) -> dict[str, bytes]:
     if not personal:
         contents['THIRD_PARTY_NOTICES.txt']=contents['THIRD_PARTY_NOTICES.txt'].split(b'Optional Framegen backend (personal edition only)')[0].rstrip()+b'\n'
         s=contents['content.js'].decode()
-        engine_old='((globalThis.VE_BUILD?.personal !== false ? ["analytic","classic","neural","ifrnet"] : ["analytic","classic"]).includes(value.fiEngine)) ? value.fiEngine : "analytic"'
+        engine_old='((globalThis.VE_BUILD?.personal !== false ? ["analytic","classic","neural","ifrnet"] : ["analytic","classic"]).includes(value.fiEngine)) ? value.fiEngine : "ifrnet"'
         engine_new='(["analytic","classic","ifrnet"].includes(value.fiEngine)) ? value.fiEngine : "ifrnet"'
         assert engine_old in s, 'engine normalization pattern not found'
         s=s.replace(engine_old,engine_new)
