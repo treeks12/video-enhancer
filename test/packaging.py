@@ -36,3 +36,4 @@ for invalid in ['/* PERSONAL_ONLY_END */','/* PERSONAL_ONLY_BEGIN */','<!-- PERS
  try:p.strip_personal(invalid);raise AssertionError('Malformed marker accepted')
  except ValueError:pass
 print(json.dumps({'result':'PASS','cases':counts,'checks':['exact allowlist','no framegen runtime, installer or download permissions in store; IFRNet-S bundled','untrusted stored engine names normalize','runtimes preserved in personal','all shipped JavaScript syntax','byte-reproducible ZIPs','malformed markers fail closed']},indent=2))
+
