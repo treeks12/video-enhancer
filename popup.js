@@ -102,7 +102,7 @@ function renderInterpolation(state) {
     status=fi.explain || "Local GPU motion; no neural weights.";
     if(fi.fallbackReason){tone="warn";title="Analytic fallback (not neural)";status=fi.fallbackReason;}
   }
-  fiEngine.value = state.settings.fiEngine || "analytic";
+  fiEngine.value = state.settings.fiEngine || "ifrnet";
   fiProfile.value = state.settings.fiProfile || "balanced";
   fiDebug.value = String(state.settings.fiDebug || 0);
   fiDebug.disabled = fiEngine.value === "classic";

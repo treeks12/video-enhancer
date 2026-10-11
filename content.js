@@ -56,7 +56,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   interaction: "smooth",
   // Frame interpolation (A/B toggles). Defaults: infra off; sub-options ready.
   fiInfra: false,
-  fiEngine: "analytic",
+  fiEngine: "ifrnet",
   fiModelRevision: "",
   fiProfile: "balanced",
   fiDebug: 0,

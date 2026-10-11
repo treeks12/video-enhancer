@@ -15,7 +15,7 @@ for browser in ['firefox','chromium']:
    source=entries['content.js'].decode();a=source.index('const DEFAULT_SETTINGS');b=source.index('// --------------------------------------------------------------------------\n// Shaders',a)
    script=entries['build-flavor.js'].decode()+'\n'+source[a:b]+'''\nconst assert=require('node:assert/strict');
      assert.equal(normalizeSettings({fiEngine:'classic'}).fiEngine,'classic');
-     assert.equal(normalizeSettings({fiEngine:'invalid'}).fiEngine,VE_BUILD.personal?'analytic':'ifrnet');
+     assert.equal(normalizeSettings({fiEngine:'invalid'}).fiEngine,'ifrnet');
      assert.equal(normalizeSettings({fiEngine:'ifrnet'}).fiEngine,'ifrnet');
      assert.equal(normalizeSettings({fiEngine:'neural'}).fiEngine,VE_BUILD.personal?'neural':'ifrnet');
    '''
