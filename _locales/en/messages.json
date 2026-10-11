@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "Video Enhancer for Firefox"
+    "message": "Video Enhancer"
   },
   "extensionDescription": {
     "message": "Local GPU motion interpolation, with optional FSR1, RAVU-lite and RCAS image enhancement."
