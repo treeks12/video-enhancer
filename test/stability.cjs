@@ -121,6 +121,17 @@ const root = path.resolve(__dirname, '..');
     await page.waitForFunction(() => status === 'ok' && !useAnimationFallback && fiHasPrev);
     console.log('PASS: changing the source restores playback without toggling');
 
+    // Feed-style rapid reuse of one <video>: each source change must advance
+    // the session while the compositor continues presenting current frames.
+    const feedStart = await page.evaluate(() => ({ draws: draws.real, session: feedSessionId }));
+    for (let i = 0; i < 8; i++) {
+      await page.evaluate(() => { video.srcObject = source.captureStream(30); video.play(); });
+      await new Promise(resolve => setTimeout(resolve, 55));
+    }
+    await page.waitForFunction(start => status === 'ok' && !stopped &&
+      draws.real > start.draws + 5 && feedSessionId > start.session, feedStart);
+    console.log('PASS: rapid reused-video feed transitions keep the compositor live');
+
     await page.evaluate(() => video.pause());
     await page.waitForFunction(() => status === 'ok' && !fiHasPrev && fiLastPresentation === 'current');
     await page.evaluate(() => video.play());
