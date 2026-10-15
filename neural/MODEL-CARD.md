@@ -1,4 +1,4 @@
-# IFRNet-S GoPro browser port, experimental 0.0.62
+# IFRNet-S GoPro browser port
 
 This is inference with an existing pretrained model, not a model trained for this extension.
 The browser runtime implements the small IFRNet encoder/decoder and learned visibility /
@@ -19,14 +19,12 @@ Preprocessing and checkpoint layout reference: https://github.com/nihui/ifrnet-n
 - Parsed parameter count, removing the duplicated encoder branch: `2803610`.
 - The two encoder branches must be identical; the loader checks this invariant.
 
-The 0.0.62 packages contain runtime code and attribution, **not the binary weights**.
-Use the model setup page's explicit Download model or Import .bin operation. Downloads request
-optional access only to cdn.jsdelivr.net (GitHub mirror of the pinned revision,
-byte-identical blob), omit credentials and referrer, and verify the pinned
-revision hash before installation. No remote executable code, model URL supplied by a page,
-video upload, telemetry, API key, native helper, Python or ONNX runtime is used at playback.
-Weights are verified before IndexedDB storage and again in the content-side loader.
-A failed verification leaves the prior installed model intact.
+Both Store and Personal packages bundle this checkpoint as `models/ifrnet.bin`.
+The content-side loader verifies its size and pinned Git blob hash before use.
+Store packages contain no model installer, download endpoint or background model
+service. No video upload, telemetry, API key, native helper, Python or ONNX runtime
+is used at playback. The optional Personal installer also verifies imported or
+downloaded weights before storing them; failed verification preserves the prior model.
 
 ## Numerical implementation
 
@@ -39,10 +37,15 @@ ncnn port, rather than the pair-mean variant in the original PyTorch entry point
 The current frame's encoder features are reused as the previous frame's features for
 the next adjacent pair. Features are invalidated on seek/reset/gaps. Inference and
 spatial enhancement share one WebGL context; only four scene-statistic floats are
-read back after a nonblocking fence. Textures and shader programs are reused.
+read back after a nonblocking fence. Model weights and size-independent shader
+programs persist across source-size changes. Two neural shapes are cached within
+a 256 MiB runtime budget; inference yields between batches of eight operations
+so a source reset can stop obsolete submissions. Separate exact-size spatial
+targets use a 96 MiB cache budget, retaining only the active working set if it
+alone exceeds that budget.
 
-Balanced caps the inference long edge at 320, then 288/256 under repeated overload.
-High quality starts at 512, then 448/384/320. Dimensions preserve aspect ratio and pad
+Balanced caps the inference long edge at 320; High quality caps it at 512.
+Dimensions preserve aspect ratio and pad
 to multiples of 32 in centered space. Final color is sampled from the full-resolution
 anchors; the output is not merely an enlarged low-resolution RGB midpoint.
 
@@ -58,14 +61,15 @@ fixture weights and compared with independent PyTorch operation implementations.
 This verifies the numerical port and graph, not the visual quality of the pretrained
 checkpoint. The fixture is deliberately rejected by the production checksum gate.
 
-The external binary could not be obtained in the implementation environment. No full
-pretrained-model inference, browser extension installation, real-video visual A/B,
-AMD/Intel/NVIDIA timing or Firefox/Chromium GPU compatibility was validated here.
-DOM tests mock extension APIs; lifecycle tests mock WebGL resource APIs; numerical
-shader tests use native GLES, not a browser. These distinctions are intentional.
+The browser regression suite also executes the bundled pretrained model in real
+WebGL2, using synthetic moving sources, resolution/aspect-ratio changes, interrupted
+preparation and rapid video replacement. Resized-kernel output is compared with the
+prior fixed-shape implementation. Spatial-only browser tests exercise FSR1/RAVU and
+paused-player resizing. Extension APIs are mocked in these fixtures; resource tests
+mock WebGL and do not measure shader speed.
 
-Treat this as an engineering preview. Do not promote the default based on synthetic
-parity alone. Validate faces, hair, crossing objects, occlusions, subtitles, flashes,
-scene cuts, anime holds, noise and long playback on the target devices. Keep generated /
-presented / late counts with quality comparisons, so skipped frames do not masquerade
-as artifact removal. Download/service-worker behavior also needs a live-browser test.
+These checks verify lifecycle behavior and numerical regression, not perceptual
+quality across live sites or a hardware compatibility matrix. Faces, hair, crossing
+objects, occlusions, subtitles, flashes, scene cuts, anime holds, noise and long
+playback still need real-video visual validation on target devices. Compare generated,
+presented and late counts so skipped frames do not masquerade as artifact removal.

@@ -7,8 +7,9 @@ dist/
 __pycache__/
 test/rife-webgpu/
 
-# Optional local weights (never commit or ship; user-installed only)
-models/
+# User-installed weights stay local; this pinned MIT checkpoint is bundled.
+models/*
+!models/ifrnet.bin
 
 # Local delivery artifacts
 HANDOFF*

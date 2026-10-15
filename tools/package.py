@@ -68,7 +68,7 @@ def entries_for(browser: str, flavor: str) -> dict[str, bytes]:
         contents['content.js']=s.encode()
         # The store never downloads anything: strip the (personal-installer-only)
         # URL/origin from the model spec so no download endpoint ships at all.
-        ms=contents['neural/model-spec.js'].decode()
+        ms=contents['neural/model-spec.js'].decode().replace('\r\n','\n')
         download_spec="    url: 'https://cdn.jsdelivr.net/gh/nihui/ifrnet-ncnn-vulkan@7e54b1caa8c9f94a052a7148a56a2f57b685609e/models/IFRNet_S_GoPro/ifrnet.bin',\n    origin: 'https://cdn.jsdelivr.net/*',\n"
         assert download_spec in ms, 'model-spec download url pattern not found'
         ms=ms.replace(download_spec,'')

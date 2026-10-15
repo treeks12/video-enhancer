@@ -1,66 +1,96 @@
-/* Local IFRNet-S inference on WebGL2. Shares the renderer's context: no image readback. */
+/* Local IFRNet-S inference. Weights/kernels persist across bounded shape changes. */
 (function(root){
 'use strict';
 const G=root.VENeuralGraph,S=root.VENeuralSpec;
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// MessageChannel avoids the nested setTimeout(0) clamp in browser inference
+// batches. It yields a task without adding 4 ms per network stage.
+let channel=null,queued=[];
+function yieldTask(){
+ if(typeof document==='undefined'||typeof MessageChannel==='undefined')return sleep(0);
+ if(!channel){channel=new MessageChannel();channel.port1.onmessage=()=>queued.shift()?.();channel.port1.unref?.();channel.port2.unref?.();}
+ return new Promise(resolve=>{queued.push(resolve);channel.port2.postMessage(0);});
+}
+const MEMORY_LIMIT=256*1024*1024,SHAPE_LIMIT=2;
+function cancelled(){const e=new Error('Neural preparation cancelled.');e.name='AbortError';return e;}
 class Runtime {
  constructor(gl,model,dimensions){
   this.gl=gl;this.model=model;this.dimensions=dimensions;this.busy=false;this.destroyed=false;
   this.lastSerial=-1;this.lastSlot=0;this.epoch=0;
   this.textures=new Set();this.programs=new Map();this.layers=new Map();this.memoryBytes=0;
+  this.shapes=new Map();this.state=null;this.idle=Promise.resolve();this.resizing=null;
+  this.diagnostics={shapeBuilds:0,shapeHits:0,resizes:0,cancelledPairs:0};
   this.fbo=gl.createFramebuffer();this.vao=gl.createVertexArray();this.syncs=new Set();
   this.khr=gl.getExtension('KHR_parallel_shader_compile');
  }
  static async create(gl,bytes,width,height,profile='balanced',step=0,signal=null){
+  if(signal?.aborted)throw cancelled();
   if(!gl||gl.isContextLost())throw new Error('WebGL context unavailable.');
   if(!gl.getExtension('EXT_color_buffer_float'))throw new Error('Neural interpolation requires floating-point render targets.');
   const engine=new Runtime(gl,S.decodeWeights(bytes),S.dimensions(width,height,profile,step));
-  const abort=()=>engine.destroy();signal?.addEventListener('abort',abort,{once:true});
-  try{if(signal?.aborted)throw new Error('Neural initialization cancelled.');await engine.prepare();return engine;}catch(e){engine.destroy();throw e;}finally{signal?.removeEventListener('abort',abort);}
+  try{await engine.prepare(engine.dimensions,signal);return engine;}catch(e){engine.destroy();throw e;}
  }
  reset(){this.epoch++;this.lastSerial=-1;}
- texture(w,h,data=null,fp32=false){
-  if(this.destroyed)throw new Error('Neural initialization cancelled.');
+ check(signal){
+  if(this.destroyed||signal?.aborted)throw cancelled();
+  if(this.gl.isContextLost())throw new Error('Neural context lost.');
+ }
+ dropShape(state){
+  if(!state)return;
+  for(const t of state.textures){this.gl.deleteTexture(t);this.textures.delete(t);}
+  this.memoryBytes-=state.bytes;state.textures.clear();state.bytes=0;
+  this.shapes.delete(state.key);
+  if(this.state===state)this.state=null;
+ }
+ trimPrograms(building=null){
+  const used=new Set(building?.programs||[]);
+  for(const state of this.shapes.values())for(const src of state.programs)used.add(src);
+  for(const [src,p]of this.programs)if(!used.has(src)){this.gl.deleteProgram(p.program);this.programs.delete(src);}
+ }
+ texture(w,h,data=null,fp32=false,state=null){
+  this.check();const bytes=w*h*(fp32?16:8);
+  // Budget includes cached shapes and shared weights. No model per feed item.
+  while(this.memoryBytes+bytes>MEMORY_LIMIT&&this.shapes.size)this.dropShape(this.shapes.values().next().value);
+  if(this.memoryBytes+bytes>MEMORY_LIMIT)throw new Error('Neural memory budget exceeded (256 MiB).');
   const gl=this.gl,tex=gl.createTexture();if(!tex)throw new Error('Texture allocation failed.');
-  this.textures.add(tex);this.memoryBytes+=w*h*(fp32?16:8);
-  if(this.memoryBytes>256*1024*1024){this.destroy();throw new Error('Neural memory budget exceeded (256 MiB).');}
+  this.textures.add(tex);this.memoryBytes+=bytes;
+  if(state){state.textures.add(tex);state.bytes+=bytes;}
   gl.bindTexture(gl.TEXTURE_2D,tex);
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
   gl.texImage2D(gl.TEXTURE_2D,0,fp32?gl.RGBA32F:gl.RGBA16F,w,h,0,gl.RGBA,gl.FLOAT,data);
   return tex;
  }
- async program(fragment){
-  if(this.destroyed)throw new Error('Neural initialization cancelled.');
+ async program(fragment,state,signal){
+  this.check(signal);state.programs.add(fragment);
   if(this.programs.has(fragment))return this.programs.get(fragment);
   const gl=this.gl;
   const make=(type,src)=>{const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);return s;};
   const v=make(gl.VERTEX_SHADER,G.VERT),f=make(gl.FRAGMENT_SHADER,fragment),p=gl.createProgram();
   gl.attachShader(p,v);gl.attachShader(p,f);gl.linkProgram(p);
-  // Let normal playback continue while a driver compiles the kernels.
   try{
    if(this.khr){const start=performance.now();while(!gl.getProgramParameter(p,this.khr.COMPLETION_STATUS_KHR)){
-    if(this.destroyed||gl.isContextLost()||performance.now()-start>30000)throw new Error('Neural shader compilation interrupted.');await sleep(8);
+    this.check(signal);if(performance.now()-start>30000)throw new Error('Neural shader compilation timed out.');await sleep(8);
    }}
-   if(this.destroyed||gl.isContextLost())throw new Error('Neural initialization cancelled.');
+   this.check(signal);
    if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error('Neural shader: '+(gl.getShaderInfoLog(f)||gl.getProgramInfoLog(p)));
   }catch(e){gl.deleteProgram(p);throw e;}finally{gl.deleteShader(v);gl.deleteShader(f);}
   const result={program:p,locations:new Map()};this.programs.set(fragment,result);return result;
  }
  location(p,name){if(!p.locations.has(name))p.locations.set(name,this.gl.getUniformLocation(p.program,name));return p.locations.get(name);}
  bind(p,name,tex,unit){const gl=this.gl;gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,tex);gl.uniform1i(this.location(p,name),unit);}
- async attach(graph){
+ async attach(graph,state,signal){
   const uses=new Map(),pool=new Map();
   for(const op of graph.ops)for(const t of op.inputs){const b=G.baseOf(t);uses.set(b,(uses.get(b)||0)+1);}
   const owned=new Set(graph.tensors);
   for(let i=0;i<graph.ops.length;i++){
-   if(this.destroyed)throw new Error('Neural initialization cancelled.');
+   this.check(signal);
    const op=graph.ops[i],o=op.out,key=o.tw+'x'+o.th;
-   const available=pool.get(key)||[];o.texture=available.pop()||this.texture(o.tw,o.th);pool.set(key,available);
-   op.program=await this.program(G.makeShader(op));
-   if(this.destroyed)throw new Error('Neural initialization cancelled.');
+   const available=pool.get(key)||[];o.texture=available.pop()||this.texture(o.tw,o.th,null,false,state);pool.set(key,available);
+   op.program=await this.program(G.makeShader(op),state,signal);this.check(signal);
    if(op.layer&&!this.layers.has(op.layer)){
     const packed=G.packLayer(op.layer);this.layers.set(op.layer,this.texture(packed.width,packed.height,packed.data,true));
+    op.layer.weights=null;
    }
    for(const t of op.inputs){const b=G.baseOf(t),n=uses.get(b)-1;uses.set(b,n);
     if(n===0&&owned.has(b)&&!graph.outputs.has(b)){
@@ -70,87 +100,136 @@ class Runtime {
    if(i%4===0)await sleep(0);
   }
  }
- async prepare(){
-  const gl=this.gl,max=gl.getParameter(gl.MAX_TEXTURE_SIZE);
-  this.enc=[G.encoder(this.model,this.dimensions,max),G.encoder(this.model,this.dimensions,max)];
-  await this.attach(this.enc[0].graph);await this.attach(this.enc[1].graph);
-  this.dec=G.decoder(this.model,this.enc[0].features,this.enc[1].features,max);await this.attach(this.dec.graph);
-  this.swap=new Map();for(let i=0;i<4;i++){
-    this.swap.set(this.enc[0].features[i],this.enc[1].features[i]);this.swap.set(this.enc[1].features[i],this.enc[0].features[i]);
-  }
-  this.synth=await this.program(G.synthShader(this.dec.flow,this.dec.raw,this.dimensions));
-  this.statsProgram=await this.program(G.STATS);this.statsTexture=this.texture(1,1,null,true);
-  gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,this.statsTexture,0);
-  if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error('Floating-point framebuffer incomplete.');
-  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
-  // Only shapes and slope-presence are needed once weights are packed on the GPU.
-  for(const layer of this.layers.keys())layer.weights=null;
+ activate(state,d){
+  this.state=state;this.dimensions=d;
+  for(const name of ['enc','dec','swap','synth'])this[name]=state[name];
+  this.shapes.delete(state.key);this.shapes.set(state.key,state);this.reset();
  }
- run(graph,source=null,phase=.5,swap=false){
+ async prepare(d=this.dimensions,signal=null){
+  this.check(signal);const key=d.w+'x'+d.h;
+  if(this.shapes.has(key)){this.diagnostics.shapeHits++;this.activate(this.shapes.get(key),d);return;}
+  while(this.shapes.size>=SHAPE_LIMIT)this.dropShape(this.shapes.values().next().value);
+  const state={key,textures:new Set(),programs:new Set(),bytes:0};
+  try{
+   const gl=this.gl,max=gl.getParameter(gl.MAX_TEXTURE_SIZE);
+   state.enc=[G.encoder(this.model,d,max),G.encoder(this.model,d,max)];
+   await this.attach(state.enc[0].graph,state,signal);await this.attach(state.enc[1].graph,state,signal);
+   state.dec=G.decoder(this.model,state.enc[0].features,state.enc[1].features,max);await this.attach(state.dec.graph,state,signal);
+   state.swap=new Map();for(let i=0;i<4;i++){
+    state.swap.set(state.enc[0].features[i],state.enc[1].features[i]);state.swap.set(state.enc[1].features[i],state.enc[0].features[i]);
+   }
+   state.synth=await this.program(G.synthShader(state.dec.flow,state.dec.raw,d),state,signal);
+   this.statsProgram=await this.program(G.STATS,state,signal);
+   if(!this.statsTexture)this.statsTexture=this.texture(1,1,null,true);
+   this.check(signal);
+   gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,this.statsTexture,0);
+   if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error('Floating-point framebuffer incomplete.');
+   gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+   this.shapes.set(key,state);this.activate(state,d);this.diagnostics.shapeBuilds++;this.trimPrograms();
+  }catch(e){this.dropShape(state);this.trimPrograms();throw e;}
+ }
+ resize(width,height,profile='balanced',signal=null){
+  const d=S.dimensions(width,height,profile);
+  this.reset();this.diagnostics.resizes++;
+  const task=(this.resizing||this.idle).catch(()=>{}).then(async()=>{
+   await this.idle;this.check(signal);await this.prepare(d,signal);return this;
+  });
+  this.resizing=task;return task.finally(()=>{if(this.resizing===task)this.resizing=null;});
+ }
+ runOps(ops,source=null,phase=.5,swap=false){
   const gl=this.gl;gl.bindVertexArray(this.vao);gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);
-  for(const op of graph.ops){
+  for(const op of ops){
    const p=op.program;gl.useProgram(p.program);
+   gl.uniform2i(this.location(p,'tensorSize'),op.out.w,op.out.h);
    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,op.out.texture,0);gl.viewport(0,0,op.out.tw,op.out.th);
    let unit=0;
-   op.inputs.forEach((t,i)=>{const b=G.baseOf(t),actual=swap?(this.swap.get(b)||b):b;this.bind(p,'s'+i,actual.texture,unit++);});
+   op.inputs.forEach((t,i)=>{const b=G.baseOf(t),actual=swap?(this.swap.get(b)||b):b;
+    this.bind(p,'s'+i,actual.texture,unit++);gl.uniform2i(this.location(p,'s'+i+'Size'),t.w,t.h);});
    if(op.layer)this.bind(p,'weights',this.layers.get(op.layer),unit++);
-   if(op.type==='preprocess')this.bind(p,'source',source,unit++);
+   if(op.type==='preprocess'){
+    this.bind(p,'source',source,unit++);gl.uniform2f(this.location(p,'activeSize'),this.dimensions.activeW,this.dimensions.activeH);
+   }
    if(op.type==='phase')gl.uniform1f(this.location(p,'phase'),phase);
    gl.drawArrays(gl.TRIANGLES,0,3);
   }
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
  }
-  async estimate(prev,curr,serial,phase=.5){
-  if(this.busy)return null;
-  if(this.destroyed||this.gl.isContextLost())throw new Error('Neural context lost.');
-  this.busy=true;const gl=this.gl,start=performance.now(),epoch=this.epoch;let sync=null;
+ async fence(epoch){
+  const gl=this.gl,sync=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);if(!sync)throw new Error('GPU fence creation failed.');
+  this.syncs.add(sync);gl.flush();const start=performance.now();
   try{
-   const reuse=this.lastSerial===serial-1,prevSlot=reuse?this.lastSlot:0,currSlot=1-prevSlot;
-   if(!reuse)this.run(this.enc[prevSlot].graph,prev);
-   this.run(this.enc[currSlot].graph,curr);
-   this.run(this.dec.graph,null,phase,prevSlot===1);
-   gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,this.statsTexture,0);
-   gl.viewport(0,0,1,1);gl.useProgram(this.statsProgram.program);
-   this.bind(this.statsProgram,'prev',prev,0);this.bind(this.statsProgram,'curr',curr,1);gl.drawArrays(gl.TRIANGLES,0,3);
-   this.lastSerial=serial;this.lastSlot=currSlot;
-   const submitMs=performance.now()-start;
-   sync=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);if(!sync)throw new Error('GPU fence creation failed.');
-   this.syncs.add(sync);gl.flush();gl.bindFramebuffer(gl.FRAMEBUFFER,null);
    while(true){
-    // reset() is the feed-session cancellation boundary. Do not wait for an
-    // obsolete source to finish before the new source can submit a pair.
-    if(this.destroyed||this.epoch!==epoch||gl.isContextLost())return null;
+    if(this.destroyed||this.epoch!==epoch)return false;
+    if(gl.isContextLost())throw new Error('Neural context lost.');
     const wait=gl.clientWaitSync(sync,0,0);
     if(wait===gl.WAIT_FAILED)throw new Error('Neural GPU fence failed.');
-    if(wait!==gl.TIMEOUT_EXPIRED)break;
+    if(wait!==gl.TIMEOUT_EXPIRED)return true;
     if(performance.now()-start>4000)throw new Error('Neural inference exceeded the safety timeout.');
-    await sleep(1);
+    await yieldTask();
    }
-   // Four scene statistics, only after the fence. No frames/features/flow leave the GPU.
+  }finally{if(this.syncs.delete(sync))gl.deleteSync(sync);}
+ }
+ async runBatched(ops,epoch,phase=.5,swap=false){
+  // Deleting a fence cannot cancel submitted work. Limit how much obsolete
+  // work may be queued ahead of the compositor, then check reset between batches.
+  for(let i=0;i<ops.length;i+=8){
+   if(this.destroyed||epoch!==this.epoch)return false;
+   this.runOps(ops.slice(i,i+8),null,phase,swap);
+   if(!await this.fence(epoch))return false;
+   await yieldTask();
+  }
+  return true;
+ }
+ async estimate(prev,curr,serial,phase=.5){
+  if(this.busy||this.resizing)return null;
+  this.check();this.busy=true;let done;this.idle=new Promise(r=>{done=r;});
+  const gl=this.gl,start=performance.now(),epoch=this.epoch;let completed=false;
+  try{
+   const reuse=this.lastSerial===serial-1,prevSlot=reuse?this.lastSlot:0,currSlot=1-prevSlot;
+   // Snapshot endpoint RGB before yielding: renderer pair textures can advance.
+   if(!reuse)this.runOps(this.enc[prevSlot].graph.ops.slice(0,1),prev);
+   this.runOps(this.enc[currSlot].graph.ops.slice(0,1),curr);
+   gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,this.statsTexture,0);
+   gl.viewport(0,0,1,1);gl.bindVertexArray(this.vao);gl.useProgram(this.statsProgram.program);
+   this.bind(this.statsProgram,'prev',prev,0);this.bind(this.statsProgram,'curr',curr,1);gl.drawArrays(gl.TRIANGLES,0,3);
+   gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.flush();const submitMs=performance.now()-start;
+   // draw() gets to present the source before expensive convolutions.
+   await yieldTask();
+   if(!reuse&&!await this.runBatched(this.enc[prevSlot].graph.ops.slice(1),epoch,phase))return null;
+   if(!await this.runBatched(this.enc[currSlot].graph.ops.slice(1),epoch,phase))return null;
+   if(!await this.runBatched(this.dec.graph.ops,epoch,phase,prevSlot===1))return null;
+   if(this.destroyed||epoch!==this.epoch)return null;
    const stats=new Float32Array(4);
    gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,this.statsTexture,0);
    gl.readPixels(0,0,1,1,gl.RGBA,gl.FLOAT,stats);gl.bindFramebuffer(gl.FRAMEBUFFER,null);
    if(!stats.every(Number.isFinite)||Math.abs(stats[3]-1)>.001)throw new Error('Invalid neural scene statistics.');
+   this.lastSerial=serial;this.lastSlot=currSlot;completed=true;
    return {serial,epoch,phase,elapsedMs:performance.now()-start,submitMs,reusedEncoder:reuse,
-    sceneCut:stats[0]>.11&&stats[1]>.35,stats:Array.from(stats),valid:epoch===this.epoch};
+    sceneCut:stats[0]>.11&&stats[1]>.35,stats:Array.from(stats),valid:true};
   }finally{
-   if(sync){gl.deleteSync(sync);this.syncs.delete(sync);}this.busy=false;
+   if(!completed){this.lastSerial=-1;this.diagnostics.cancelledPairs++;}
+   this.busy=false;done();
   }
  }
  render(prev,curr,target,w,h,debug='off'){
-  if(this.destroyed||this.busy)return false;
+  if(this.destroyed||this.busy||this.resizing||!this.state)return false;
   const gl=this.gl,p=this.synth;gl.bindVertexArray(this.vao);gl.useProgram(p.program);
   gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,target,0);
   gl.viewport(0,0,w,h);
   this.bind(p,'flow',G.baseOf(this.dec.flow).texture,0);this.bind(p,'raw',G.baseOf(this.dec.raw).texture,1);
+  gl.uniform2i(this.location(p,'flowSize'),this.dec.flow.w,this.dec.flow.h);
+  gl.uniform2i(this.location(p,'rawSize'),this.dec.raw.w,this.dec.raw.h);
   this.bind(p,'prev',prev,2);this.bind(p,'curr',curr,3);
-  gl.uniform2f(this.location(p,'outputSize'),w,h);gl.uniform1i(this.location(p,'debugMode'),{off:0,flow:1,mask:2,residual:3}[debug]||0);
+  gl.uniform2f(this.location(p,'outputSize'),w,h);gl.uniform2f(this.location(p,'activeSize'),this.dimensions.activeW,this.dimensions.activeH);
+  gl.uniform1i(this.location(p,'debugMode'),{off:0,flow:1,mask:2,residual:3}[debug]||0);
   gl.drawArrays(gl.TRIANGLES,0,3);gl.bindFramebuffer(gl.FRAMEBUFFER,null);return true;
  }
  destroy(){
   if(this.destroyed)return;this.destroyed=true;this.reset();const gl=this.gl;
   for(const sync of this.syncs)gl.deleteSync(sync);this.syncs.clear();
   for(const t of this.textures)gl.deleteTexture(t);for(const p of this.programs.values())gl.deleteProgram(p.program);
-  gl.deleteFramebuffer(this.fbo);gl.deleteVertexArray(this.vao);this.textures.clear();this.programs.clear();this.layers.clear();
+  gl.deleteFramebuffer(this.fbo);gl.deleteVertexArray(this.vao);
+  this.textures.clear();this.programs.clear();this.layers.clear();this.shapes.clear();this.state=null;this.memoryBytes=0;
  }
 }
 root.VENeuralRuntime=Runtime;if(typeof module!=='undefined')module.exports=Runtime;

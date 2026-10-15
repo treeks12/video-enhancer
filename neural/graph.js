@@ -11,7 +11,9 @@ out vec4 color;
 function layout(w,h,c,max=4096){
  const groups=Math.ceil(c/4), maxCols=Math.floor(max/w), maxRows=Math.floor(max/h);
  if(maxCols<1||maxRows<1||maxCols*maxRows<groups)throw new Error('Neural tensor exceeds MAX_TEXTURE_SIZE.');
- const cols=Math.min(maxCols,groups,Math.max(Math.ceil(groups/maxRows),Math.ceil(Math.sqrt(groups*h/w))));
+ // Stable tiling for a channel count lets every spatial shape share kernels.
+ // Only fall back from this layout if a hardware texture-size bound requires it.
+ const cols=Math.min(maxCols,groups,Math.max(Math.ceil(groups/maxRows),Math.ceil(Math.sqrt(groups))));
  return {w,h,c,groups,cols,tw:w*cols,th:h*Math.ceil(groups/cols)};
 }
 function baseOf(t){return t.base||t;}
@@ -19,27 +21,28 @@ function view(t,offset,c){if(offset<0||offset+c>t.c)throw new Error('Channel sli
 function reader(t,name){
  const b=baseOf(t),off=t.offset||0;
  return `uniform sampler2D ${name};
+uniform ivec2 ${name}Size;
 float ${name}C(ivec2 p,int c){
  if(c<0||c>=${t.c})return 0.0;
  int k=c+${off};int g=k/4;
- ivec2 q=clamp(p,ivec2(0),ivec2(${t.w-1},${t.h-1}));
- return texelFetch(${name},q+ivec2(g%${b.cols}*${b.w},g/${b.cols}*${b.h}),0)[k%4];
+ ivec2 q=clamp(p,ivec2(0),${name}Size-1);
+ return texelFetch(${name},q+ivec2(g%${b.cols},g/${b.cols})*${name}Size,0)[k%4];
 }
 vec4 ${name}V(ivec2 p,int g){${off%4===0?`
- int k=g+${off/4};ivec2 q=clamp(p,ivec2(0),ivec2(${t.w-1},${t.h-1}));
- vec4 v=texelFetch(${name},q+ivec2(k%${b.cols}*${b.w},k/${b.cols}*${b.h}),0);
+ int k=g+${off/4};ivec2 q=clamp(p,ivec2(0),${name}Size-1);
+ vec4 v=texelFetch(${name},q+ivec2(k%${b.cols},k/${b.cols})*${name}Size,0);
  ${t.c%4?`if(g==${Math.floor(t.c/4)})v*=vec4(${[0,1,2,3].map(i=>i<t.c%4?'1.0':'0.0').join(',')});`:''}return v;`
  :`int k=g*4;return vec4(${name}C(p,k),${name}C(p,k+1),${name}C(p,k+2),${name}C(p,k+3));`}}
 vec4 ${name}B(vec2 p,int g){
- p=clamp(p,vec2(0.0),vec2(${t.w-1}.0,${t.h-1}.0));ivec2 q=ivec2(floor(p));vec2 f=fract(p);
+ p=clamp(p,vec2(0.0),vec2(${name}Size-1));ivec2 q=ivec2(floor(p));vec2 f=fract(p);
  return mix(mix(${name}V(q,g),${name}V(q+ivec2(1,0),g),f.x),mix(${name}V(q+ivec2(0,1),g),${name}V(q+ivec2(1,1),g),f.x),f.y);
 }
 `;
 }
-function coords(o){return `ivec2 q=ivec2(gl_FragCoord.xy);ivec2 p=ivec2(q.x%${o.w},q.y%${o.h});int g=q.x/${o.w}+q.y/${o.h}*${o.cols};if(g>=${o.groups}){color=vec4(0.0);return;}\n`;}
+function coords(o){return `ivec2 q=ivec2(gl_FragCoord.xy);ivec2 p=q%tensorSize;int g=q.x/tensorSize.x+q.y/tensorSize.y*${o.cols};if(g>=${o.groups}){color=vec4(0.0);return;}\n`;}
 function makeShader(op){
  const {type,out:o,inputs:ins}=op;
- let src=HEAD+ins.map((t,i)=>reader(t,'s'+i)).join('');
+ let src=HEAD+'uniform ivec2 tensorSize;\n'+ins.map((t,i)=>reader(t,'s'+i)).join('');
  let body=coords(o);
  if(type==='conv'){
   const {layer:l,stride=1,deconv=false,residual=false}=op;
@@ -50,7 +53,7 @@ function makeShader(op){
   body+=`for(int ic=0;ic<${l.ci};ic+=4){for(int y=0;y<${deconv?2:l.k};y++){for(int x=0;x<${deconv?2:l.k};x++){
    ${deconv?`int ky=(p.y+1)%2+2*y;int kx=(p.x+1)%2+2*x;ivec2 ip=ivec2((p.x+1-kx)/2,(p.y+1-ky)/2);`:
    `int ky=y;int kx=x;ivec2 ip=p*${stride}+ivec2(x-1,y-1);`}
-   if(ip.x<0||ip.y<0||ip.x>=${ins[0].w}||ip.y>=${ins[0].h})continue;
+   if(ip.x<0||ip.y<0||ip.x>=s0Size.x||ip.y>=s0Size.y)continue;
    vec4 v=s0V(ip,ic/4);int k=ky*${l.k}+kx;int ix=2+ic*${l.k*l.k}+k;
    total+=v.x*texelFetch(weights,ivec2(ix,g),0);
    if(ic+1<${l.ci})total+=v.y*texelFetch(weights,ivec2(ix+${l.k*l.k},g),0);
@@ -75,10 +78,9 @@ function makeShader(op){
   src+='uniform float phase;\n';body+='color=vec4(phase,0.0,0.0,0.0);';
  }else if(type==='preprocess'){
   // Match the maintained ncnn port: RGB/255 - 0.5, zero padding in centered space.
-  src+='uniform sampler2D source;\n';
-  const d=op.dimensions;
-  body+=`if(p.x>=${d.activeW}||p.y>=${d.activeH}){color=vec4(0.0);return;}
-  vec3 v=texture(source,(vec2(p)+0.5)/vec2(${d.activeW}.0,${d.activeH}.0)).rgb;
+  src+='uniform sampler2D source;\nuniform vec2 activeSize;\n';
+  body+=`if(float(p.x)>=activeSize.x||float(p.y)>=activeSize.y){color=vec4(0.0);return;}
+  vec3 v=texture(source,(vec2(p)+0.5)/activeSize).rgb;
   color=vec4(v-0.5,0.0);`;
  }else throw new Error('Unknown fixed graph operation: '+type);
  return src+'void main(){\n'+body+'\n}';
@@ -135,15 +137,16 @@ function synthShader(flow,raw,d){return HEAD+reader(flow,'flow')+reader(raw,'raw
 uniform sampler2D prev;
 uniform sampler2D curr;
 uniform vec2 outputSize;
+uniform vec2 activeSize;
 uniform int debugMode;
 void main(){
  vec2 uv=gl_FragCoord.xy/outputSize;
- vec2 p=uv*vec2(${d.activeW}.0,${d.activeH}.0)-0.5;
+ vec2 p=uv*activeSize-0.5;
  vec4 f=flowB(p,0);vec4 r=rawB(p,0); // visibility, residual RGB; sigmoid precedes resizing
  if(any(isnan(f))||any(isinf(f))||any(isnan(r))||any(isinf(r))){color=vec4(texture(prev,uv).rgb,1.0);return;}
  float mask=clamp(r.x,0.0,1.0);
- vec2 a=uv+f.xy/vec2(${d.activeW}.0,${d.activeH}.0);
- vec2 b=uv+f.zw/vec2(${d.activeW}.0,${d.activeH}.0);
+ vec2 a=uv+f.xy/activeSize;
+ vec2 b=uv+f.zw/activeSize;
  // Preserve the learned visibility mask. Do not replace it with noisy local argmax.
  vec3 v=texture(prev,clamp(a,vec2(0.0),vec2(1.0))).rgb*mask+
         texture(curr,clamp(b,vec2(0.0),vec2(1.0))).rgb*(1.0-mask)+r.yzw;

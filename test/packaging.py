@@ -1,6 +1,7 @@
 """Fail-closed edition boundaries, reproducibility and source preservation."""
 from pathlib import Path
 import importlib.util, tempfile, subprocess, json, hashlib
+from unittest import mock
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('packager',ROOT/'tools/package.py');p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 counts=[]
@@ -35,5 +36,11 @@ for browser in ['firefox','chromium']:
 for invalid in ['/* PERSONAL_ONLY_END */','/* PERSONAL_ONLY_BEGIN */','<!-- PERSONAL_ONLY_BEGIN --><!-- PERSONAL_ONLY_BEGIN --><!-- PERSONAL_ONLY_END -->']:
  try:p.strip_personal(invalid);raise AssertionError('Malformed marker accepted')
  except ValueError:pass
-print(json.dumps({'result':'PASS','cases':counts,'checks':['exact allowlist','no framegen runtime, installer or download permissions in store; IFRNet-S bundled','untrusted stored engine names normalize','runtimes preserved in personal','all shipped JavaScript syntax','byte-reproducible ZIPs','malformed markers fail closed']},indent=2))
+read_bytes=Path.read_bytes
+def windows_model_spec(path):
+ data=read_bytes(path)
+ return data.replace(b'\r\n',b'\n').replace(b'\n',b'\r\n') if path==ROOT/'neural/model-spec.js' else data
+with mock.patch.object(Path,'read_bytes',windows_model_spec):
+ assert b'cdn.jsdelivr' not in p.entries_for('firefox','store')['neural/model-spec.js']
+print(json.dumps({'result':'PASS','cases':counts,'checks':['exact allowlist','no framegen runtime, installer or download permissions in store; IFRNet-S bundled','untrusted stored engine names normalize','runtimes preserved in personal','all shipped JavaScript syntax','byte-reproducible ZIPs','malformed markers fail closed','Windows source-archive line endings']},indent=2))
 

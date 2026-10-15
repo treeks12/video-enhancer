@@ -13,6 +13,10 @@ feed reuses or replaces a `<video>` element, and the current source frame is
 rendered immediately while the next interpolation pair is prepared. Spatial
 enhancement remains active during that handoff.
 
+The neural model and size-independent shaders stay loaded across resolution and
+aspect-ratio changes. Bounded caches reuse neural shapes and exact-size spatial
+textures; obsolete inference stops submitting work between small GPU batches.
+
 IFRNet-S is the default interpolation engine in the Store build, with Analytic Flow as an automatic fallback when the neural model cannot run. The result depends on the browser, GPU, source video and motion complexity. Occlusions, scene cuts and very fast movement can still produce artifacts; the extension bypasses uncertain pairs instead of freezing the playback clock.
 
 [Install for Firefox](https://addons.mozilla.org/en-US/firefox/addon/video-enhancer-for-firefox/) · [Download releases](https://github.com/treeks12/video-enhancer/releases) · [Project website](https://treeks12.github.io/video-enhancer/)
@@ -47,6 +51,9 @@ python test/packaging.py
 
 Browser tests in `test/` require Playwright and a compatible browser/GPU.
 `node test/stability.cjs` exercises video playback, source transitions and recovery.
+`node test/feed-resize.cjs` exercises the bundled IFRNet model during feed changes;
+set `FEED_HD=1` for 720p/1080p sources. `node test/spatial-resize.cjs` isolates
+FSR1 and RAVU with interpolation disabled, including paused-player resizing.
 Mock GPU tests validate lifecycle behavior, not visual quality or real GPU speed.
 Live-site playback and interpolation quality still require manual validation.
 
