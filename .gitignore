@@ -9,3 +9,10 @@ test/rife-webgpu/
 
 # Optional local weights (never commit or ship; user-installed only)
 models/
+
+# Local delivery artifacts
+HANDOFF*
+LEIA*.md
+changes-from-*.patch
+local-history.bundle
+release-evidence/
