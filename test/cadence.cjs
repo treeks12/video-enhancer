@@ -306,3 +306,25 @@ schedulerHarness.context.scheduleMid(1,{expectedDisplayTime:6000});schedulerHarn
 assert.equal(schedulerHarness.context.schedulerResult().draws.length,0,'late neural frame must not be displayed');
 assert.equal(schedulerHarness.context.schedulerResult().pending,0);
 console.log('PASS: neural scheduler preserves inferred phase and drops expired output');
+
+// Congestion during startup must not permanently become the display refresh
+// rate. The retained engine must also follow a later display-rate change.
+const clock=loadFunctions(contentSource,['fiMeasureDisplay'],`
+ let fiDisplayRaf=null,fiDisplayPeriod=1000/60,fiDisplayReference=0,stopped=false;
+ let settings={fiInfra:true},currentVideo={},document={hidden:false};
+ const canRender=()=>true;let next=null,id=0;
+ const requestAnimationFrame=cb=>{next=cb;return ++id;};
+ globalThis.tickClock=t=>{const cb=next;next=null;if(cb)cb(t);};
+ globalThis.clockState=()=>({period:fiDisplayPeriod,pending:!!next});
+ globalThis.disableClock=()=>{settings.fiInfra=false;};
+`);
+clock.get('fiMeasureDisplay')();let tick=1000;
+for(let i=0;i<13;i++)clock.context.tickClock(tick+=1000/30);
+close(clock.context.clockState().period,1000/30,'initial congested estimate');
+for(let i=0;i<60;i++)clock.context.tickClock(tick+=1000/60);
+close(clock.context.clockState().period,1000/60,'healthy display recovers without toggling');
+for(let i=0;i<40;i++)clock.context.tickClock(tick+=1000/120);
+close(clock.context.clockState().period,1000/120,'retained engine follows display-rate change');
+clock.context.disableClock();clock.context.tickClock(tick+1000/120);
+assert.equal(clock.context.clockState().pending,false,'disabled interpolation stops its display sampler');
+console.log('PASS: rolling display clock recovers after startup congestion and display changes');

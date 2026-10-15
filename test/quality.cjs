@@ -6,8 +6,16 @@ assert.equal(Q.floatToHalf(NaN),0);assert.equal(Q.floatToHalf(Infinity),0);asser
 assert.equal(Q.floatToHalf(2**-25),0);assert.equal(Q.floatToHalf(1+2**-11),0x3c00);
 for(const fps of [24,25,30,50,60])for(const hz of [60,90,120,144,165]){
  const d=1000/fps,p=1000/hz;
- for(let off=0;off<p;off+=.5){const slot=Q.neuralSlot(1000+off,d,p,1000);if(slot){assert.ok(slot.phase>=.25&&slot.phase<=.85);assert.ok(slot.expires<1000+off+d);assert.ok(Math.abs((slot.time-1000)/p-Math.round((slot.time-1000)/p))<1e-6);}}
+ for(let off=0;off<p;off+=.5){const slot=Q.neuralSlot(1000+off,d,p,1000);if(d>=2*p)assert.ok(slot,'a usable display tick must not be skipped');if(slot){assert.ok(slot.phase>=.25&&slot.phase<=.85);assert.ok(slot.expires<1000+off+d);assert.ok(Math.abs((slot.time-1000)/p-Math.round((slot.time-1000)/p))<1e-6);}}
 }
+for(let i=0;i<120;i++)assert.ok(Q.neuralSlot(1000+i*1000/30,1000/30,1000/60,995.5),'fixed phase offset must not starve interpolation');
+const early=Q.neuralSlot(1000,1000/24,1000/120,1000,1001);
+const later=Q.neuralSlot(1000,1000/24,1000/120,1000,1026);
+const cold=Q.neuralSlot(1000,1000/24,1000/120,1000,1052);
+assert.ok(later.time>early.time&&later.time>=1026,'slow-enough inference uses a later feasible tick');
+assert.ok(cold&&cold.phase<=.85,'cold cost beyond deadline still permits a fresh attempt');
+assert.deepEqual(Q.neuralSlot(1000,1000/24,1000/120,1000,NaN),early,'invalid history does not poison slots');
+assert.equal(Q.neuralSlot(1000,1000/24,1000/120,1000,1001).time,early.time,'fast result restores midpoint preference');
 assert.equal(Q.neuralSlot(1000,1000/60,1000/60,1000),null);
 assert.throws(()=>Q.dimensions(0,1,10,10));
 assert.deepEqual(Q.dimensions(1920,1080,640,368),{width:640,height:352});

@@ -91,9 +91,14 @@ function renderInterpolation(state) {
   }
   if (enabled && fi.fallbackReason) {
     tone = "warn"; title = "Neural fallback: classical engine"; status = fi.fallbackReason;
-  } else if (enabled && ["neural","ifrnet"].includes(fi.actualEngine)) {
+  } else if (enabled && state.status === "ok" && state.visible && state.settings.mode !== "off" && state.settings.fiBlockMatch !== false && ["neural","ifrnet"].includes(fi.actualEngine)) {
     tone = number(fi.midPerSec) > 0 ? "ok" : "warn";
-    title = number(fi.midPerSec) > 0 ? "Compact neural active" : "Neural: preparing or missing slots";
+    const name=fi.actualEngine==='ifrnet'?'IFRNet-S':'Framegen';
+    title=number(fi.midPerSec)>0?`${name} active`:
+      fi.backend==='initializing'?`Preparing ${name}`:
+      number(fi.frameIntervalMs)>0&&number(fi.computeMs)>=number(fi.frameIntervalMs)?'Neural inference is behind playback':
+      /No extra display slot/.test(fi.explain||'')?'No extra display slot':
+      /Waiting for adjacent/.test(fi.explain||'')?'Waiting for adjacent video frames':'Waiting for a neural result';
     status = fi.explain || "Local neural reconstruction with source-resolution synthesis.";
   }
   if (enabled && state.settings.mode !== "off" && state.settings.fiBlockMatch !== false && state.visible && fi.actualEngine === "analytic") {
@@ -120,7 +125,7 @@ function renderInterpolation(state) {
   $("#fiHold").textContent = enabled ? `${number(fi.sceneCutHold)} · ${fi.hasPair ? "ready" : "buffering"}` : "—";
   const neural = fi.neural || fi.analytic;
   $("#fiSample").textContent = neural?.modelSize ? `${neural.modelSize.width}×${neural.modelSize.height} model` : (fi.sample || "—");
-  $("#fiNeuralStats").textContent = neural ? `${fixed(neural.p95)} ms · ${number(neural.completed)} / ${number(neural.late)}` : "n/a";
+  $("#fiNeuralStats").textContent = neural ? `${fixed(neural.p95 ?? neural.ms)} ms · ${number(neural.completed)} / ${number(neural.late)}` : "n/a";
   $("#fiCoverage").textContent=fi.analytic?`${Math.round(number(fi.analytic.coverage)*100)}% sampled support`:'n/a';
   $("#fiRates").textContent = enabled ? `${fixed(fi.realPerSec,0)} / ${fixed(fi.midPerSec,0)} per s` : "—";
 }

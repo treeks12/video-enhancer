@@ -16,6 +16,10 @@ enhancement remains active during that handoff.
 The neural model and size-independent shaders stay loaded across resolution and
 aspect-ratio changes. Bounded caches reuse neural shapes and exact-size spatial
 textures; obsolete inference stops submitting work between small GPU batches.
+Startup weight conversion uses short, cancellable CPU tasks and a bit-exact
+float16 lookup table. IFRNet preparation skips the legacy CPU frame readback and
+unused legacy shaders. A rolling display clock and feasible-tick selection keep
+interpolation from getting stuck after source or refresh-rate changes.
 
 IFRNet-S is the default interpolation engine in the Store build, with Analytic Flow as an automatic fallback when the neural model cannot run. The result depends on the browser, GPU, source video and motion complexity. Occlusions, scene cuts and very fast movement can still produce artifacts; the extension bypasses uncertain pairs instead of freezing the playback clock.
 
@@ -54,6 +58,9 @@ Browser tests in `test/` require Playwright and a compatible browser/GPU.
 `node test/feed-resize.cjs` exercises the bundled IFRNet model during feed changes;
 set `FEED_HD=1` for 720p/1080p sources. `node test/spatial-resize.cjs` isolates
 FSR1 and RAVU with interpolation disabled, including paused-player resizing.
+`node test/neural-startup.cjs` measures cold-start responsiveness while spatial
+enhancement stays active. Set `STARTUP_CPU=4` to simulate a slower CPU; optional
+`BASELINE_REF` comparisons require Git history.
 Mock GPU tests validate lifecycle behavior, not visual quality or real GPU speed.
 Live-site playback and interpolation quality still require manual validation.
 

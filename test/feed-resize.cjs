@@ -24,7 +24,7 @@ const code=name=>ref?cp.execFileSync('git',['show',ref+':'+name],{cwd:root,encod
     storage:{onChanged:{addListener(){}},local:{get:async d=>({...d,mode:'rcas',strength:35,fiEngine:'ifrnet',fiInfra:true,interaction:'quality'})}}};
    window.testState={frames:[],creates:0,decodes:0,inferences:[],midpoints:0};
    window.video=document.querySelector('video');window.player=document.getElementById('player');
-   window.switchSource=async(w,h,replace=false)=>{
+   window.switchSource=async(w,h,replace=false,fps=30)=>{
     if(window.paintTimer)clearInterval(paintTimer);
     for(const track of video.srcObject?.getTracks()||[])track.stop();
     if(replace){const next=document.createElement('video');next.muted=true;next.autoplay=true;video.replaceWith(next);
@@ -35,7 +35,7 @@ const code=name=>ref?cp.execFileSync('git',['show',ref+':'+name],{cwd:root,encod
     const paint=()=>{ctx.fillStyle='#224477';ctx.fillRect(0,0,w,h);ctx.fillStyle='#eecc55';ctx.fillRect((frame++*2)%(w-12),h/4,12,h/2);};paint();
     const scale=Math.min(2,384/Math.max(w,h));
     video.style.cssText=`width:${w*scale}px;height:${h*scale}px`;player.style.width=w*scale+'px';player.style.height=h*scale+'px';
-    video.srcObject=src.captureStream(30);window.paintTimer=setInterval(paint,1000/30);await video.play();
+    video.srcObject=src.captureStream(fps);window.paintTimer=setInterval(paint,1000/fps);await video.play();
    };
   });
   for(const name of scripts.slice(0,-1))await page.addScriptTag({content:code(name)});
@@ -49,7 +49,8 @@ const code=name=>ref?cp.execFileSync('git',['show',ref+':'+name],{cwd:root,encod
      });return engine;
     });
    };
-   const decode=VENeuralSpec.decodeWeights;VENeuralSpec.decodeWeights=(...args)=>{testState.decodes++;return decode(...args);};
+   const name=typeof VENeuralSpec.decodeWeightsAsync==='function'?'decodeWeightsAsync':'decodeWeights';
+   const decode=VENeuralSpec[name];VENeuralSpec[name]=(...args)=>{testState.decodes++;return decode(...args);};
   });
   await page.evaluate(hd=>switchSource(...(hd?[1280,720]:[96,64])),hd);await page.addScriptTag({content:code('content.js')});
   await page.evaluate(()=>{
@@ -102,6 +103,15 @@ const code=name=>ref?cp.execFileSync('git',['show',ref+':'+name],{cwd:root,encod
    await page.evaluate(()=>applySettings({...settings,interaction:'quality'}));
    await page.waitForFunction(()=>fiGpuState==='ready');
    console.log('PASS: changing resolution during balanced/smooth scrolling resumes current session');
+   for(const fps of [24,30]){
+    const before=await page.evaluate(({hd,fps})=>{
+     const count=testState.midpoints;fiDisplayPeriod=1000/30;
+     window.nextFps=switchSource(...(hd?[1280,720]:[96,64]),false,fps);return count;
+    },{hd,fps});
+    await page.evaluate(()=>nextFps);
+    await page.waitForFunction(before=>testState.midpoints>before&&fiDisplayPeriod<20,before,{timeout:10000});
+   }
+   console.log('PASS: interpolation resumes after source FPS changes and a poisoned display estimate');
   }
   const result=await page.evaluate(()=>({creates:testState.creates,decodes:testState.decodes,
    frames:testState.frames.length,glError:gl.getError(),status,engine:fiGpuEngine.kind,

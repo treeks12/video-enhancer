@@ -1096,9 +1096,10 @@ function fiEnsurePrograms() {
 }
 
 function warmFiPrograms() {
-  if (!settings.fiInfra || !gl || (fiBlendProgram && fiWarpProgram)) return;
+  if (!settings.fiInfra || !gl || (fiBlendProgram && fiWarpProgram) ||
+      (settings.fiEngine !== "classic" && fiGpuEngine?.kind !== "classic")) return;
   queueMicrotask(() => {
-    if (settings.fiInfra && gl && !fiEnsurePrograms()) {
+    if (settings.fiInfra && gl && (settings.fiEngine === "classic" || fiGpuEngine?.kind === "classic") && !fiEnsurePrograms()) {
       log("FI shaders unavailable:", lastError);
     }
   });
@@ -1108,6 +1109,7 @@ function fiWarmGpu() {
   if (!settings.fiInfra || fiGpuState === "unavailable") return;
   const width=currentVideo?.videoWidth||0,height=currentVideo?.videoHeight||0;
   if (!width || !height) return;
+  fiMeasureDisplay();
   if (fiGpuInit) {
     if (fiGpuInitSize && (fiGpuInitSize.width!==width || fiGpuInitSize.height!==height)) fiGpuController?.abort();
     return;
@@ -1130,7 +1132,6 @@ function fiWarmGpu() {
   fiGpuController = controller;
   fiGpuInitSize = {width,height};
   fiGpuState = "initializing";
-  fiMeasureDisplay();
   fiGpuInit = Promise.resolve().then(async () => {
 /* PERSONAL_ONLY_BEGIN */
     if (globalThis.VE_BUILD?.personal !== false && requested === "neural" && !fiNeuralFailure) {
@@ -1323,32 +1324,44 @@ function fiRequestIfrPair() {
   const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo,
     session=typeof feedSessionId === "number" ? feedSessionId : 0;
   const duration=lastVideoFrameDurationMs||1000/((metricReport.videoFps||30)*(video.playbackRate||1));
-  const slot=FiQuality.neuralSlot(fiPairAnchorTime,duration,fiDisplayPeriod,fiDisplayReference||fiPairAnchorTime);
+  const estimate=Number.isFinite(engine.stats.ms)&&engine.stats.ms>0?engine.stats.ms:0;
+  const slot=FiQuality.neuralSlot(fiPairAnchorTime,duration,fiDisplayPeriod,fiDisplayReference||fiPairAnchorTime,
+    estimate?performance.now()+estimate+1:fiPairAnchorTime);
   fiNeuralResult=fiNeuralTarget=null;
-  if(!slot||!fiHasPrev||fiPairDiscontinuous||fiGpuBusy||!settings.fiBlockMatch)return false;
+  if(!settings.fiBlockMatch){fiSkipReason="Motion estimation is disabled.";return false;}
+  if(!fiHasPrev||fiPairDiscontinuous){fiSkipReason="Waiting for adjacent video frames after a source change or gap.";return false;}
+  if(!slot){fiSkipReason=`No extra display slot (${(1000/duration).toFixed(1)} fps video; ${(1000/fiDisplayPeriod).toFixed(1)} Hz display).`;return false;}
+  if(fiGpuBusy){fiSkipReason=`IFRNet is processing a previous pair (${(engine.stats.ms||0).toFixed(1)} ms; ${duration.toFixed(1)} ms source interval).`;return false;}
   fiNeuralTarget=slot;fiGpuBusy=true;fiMethod="pending";
+  fiSkipReason="Computing a neural frame for the next display slot.";
   engine.estimate(fiPrevTexture,fiCurrTexture,serial,slot.phase).then(result=>{
-    if(fiGpuEngine!==engine||!isCurrentFeedSession(video, session)||serial!==fiPairSerial||!settings.fiInfra||!canRender())return;
-    fiGpuElapsedMs=result?.elapsedMs||0;engine.stats.ms=fiGpuElapsedMs;engine.stats.completed++;
-    if(!result?.valid||performance.now()>slot.expires){engine.stats.late++;fiMethod="skip";return;}
+    if(fiGpuEngine!==engine||!isCurrentFeedSession(video, session)||!settings.fiInfra||!canRender())return;
+    if(!result?.valid)return;
+    fiGpuElapsedMs=result.elapsedMs||0;engine.stats.ms=fiGpuElapsedMs;engine.stats.completed++;
+    if(serial!==fiPairSerial||performance.now()>slot.expires){
+      engine.stats.late++;
+      if(serial===fiPairSerial){fiMethod="skip";fiSkipReason=`Neural result arrived after its display slot (${fiGpuElapsedMs.toFixed(1)} ms compute; ${duration.toFixed(1)} ms source interval).`;}
+      return;
+    }
     if(settings.fiSceneCut&&result.sceneCut){fiMethod="skip";fiSkipReason="Scene cut; keeping original anchors.";return;}
     fiNeuralResult=result;fiGpuReadySerial=serial;fiMethod="ifrnet";fiSkipReason="";
   }).catch(error=>fiUseClassicFallback(engine,error,session)).finally(()=>{if(fiGpuEngine===engine)fiGpuBusy=false;});return true;
 }
 function fiMeasureDisplay() {
-  if (fiDisplayRaf !== null) return;
+  if (fiDisplayRaf !== null || !settings.fiInfra || stopped) return;
   let previous = null;
   const intervals = [];
   const sample = now => {
     fiDisplayRaf = null;
-    if (!settings.fiInfra || document.hidden || stopped) return;
+    if (!settings.fiInfra || document.hidden || stopped || !currentVideo || !canRender()) return;
     if (previous !== null && now - previous > 2 && now - previous < 80) intervals.push(now - previous);
     previous = now;
     fiDisplayReference = now;
-    if (intervals.length >= 12) {
-      intervals.sort((a, b) => a - b);
-      fiDisplayPeriod = intervals[Math.floor(intervals.length / 2)];
-    } else fiDisplayRaf = requestAnimationFrame(sample);
+    if(intervals.length>32)intervals.shift();
+    // Keep sampling: startup congestion or a display/source transition must
+    // not permanently poison the refresh estimate and suppress all slots.
+    if(intervals.length>=8){const sorted=intervals.slice().sort((a,b)=>a-b);fiDisplayPeriod=sorted[Math.floor(sorted.length*.2)];}
+    fiDisplayRaf = requestAnimationFrame(sample);
   };
   fiDisplayRaf = requestAnimationFrame(sample);
 }
@@ -1763,7 +1776,9 @@ function fiAfterVideoUpload(video) {
   fiCopyTexture(texture, fiCurrTexture, w, h);
   fiHasCurr = true;
   fiPairSerial++;
-  if (!["analytic","ifrnet"].includes(fiGpuEngine?.kind)) fiUpdateLumaSample(video);
+  // Legacy LK and Personal Framegen's scene checks consume CPU luma. IFRNet
+  // and an unready neural backend must not read video pixels back every frame.
+  if (settings.fiEngine === "classic" || ["classic","neural"].includes(fiGpuEngine?.kind)) fiUpdateLumaSample(video);
   return fiRequestGpuPair();
 }
 
@@ -3056,6 +3071,8 @@ function snapshot() {
       analytic: fiGpuEngine?.kind === "analytic" ? {...fiGpuEngine.stats, late:fiAnalyticLate, step:fiAnalyticStep, cooldownMs:Math.max(0,fiAnalyticRetryAt-now)} : null,
       neural: ["neural","ifrnet"].includes(fiGpuEngine?.kind) ? { ...fiGpuEngine.stats, modelSize: fiGpuEngine.modelSize, debug: settings.fiDebug } : null,
       computeMs: fiGpuElapsedMs,
+      displayHz: 1000 / fiDisplayPeriod,
+      frameIntervalMs: lastVideoFrameDurationMs,
       backendError: fiGpuError,
       method: fiMethod,
       confidence: ["neural","ifrnet"].includes(fiGpuEngine?.kind) ? null : fiConfidence,

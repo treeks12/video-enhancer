@@ -36,12 +36,21 @@
     quality: Object.freeze({motionW: 640, motionH: 360, neuralW: 960, neuralH: 544})
   });
   function profile(name) { return profiles[name] || profiles.balanced; }
-  function neuralSlot(anchor, duration, period, reference) {
-    if (![anchor,duration,period,reference].every(Number.isFinite) || duration <= period * 1.45) return null;
-    const first = anchor + duration * .38;
-    const time = reference + Math.ceil((first - reference)/period) * period;
-    const phase = (time-anchor)/duration;
-    return phase >= .25 && phase <= .85 ? {time, phase, expires: Math.min(anchor+duration-1, time+period*.6)} : null;
+  function neuralSlot(anchor, duration, period, reference, readyAt=anchor) {
+    if (![anchor,duration,period,reference].every(Number.isFinite) || period <= 0 || duration <= period * 1.45) return null;
+    // Search the whole usable interval. Starting at .38 could skip its only
+    // display tick and reject every pair at a stable source/display phase.
+    const first=Math.ceil((anchor+duration*.25-reference)/period);
+    const last=Math.floor((anchor+duration*.85-reference)/period);
+    if(first>last)return null;
+    // Prefer a tick the last measured inference can reach. A cold slow result
+    // must not disable future attempts: keep the latest usable tick available.
+    const ready=Number.isFinite(readyAt)?Math.ceil((readyAt-reference)/period):first;
+    const earliest=Math.max(first,Math.min(last,ready));
+    const index=Math.max(earliest,Math.min(last,Math.round((anchor+duration*.5-reference)/period)));
+    const time=reference+index*period;
+    const phase=Math.max(.25,Math.min(.85,(time-anchor)/duration));
+    return {time,phase,expires:Math.min(anchor+duration-1,time+period*.6)};
   }
   function validFlow(x,y,limit) { return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= limit && Math.abs(y) <= limit; }
   // Reject isolated, low-confidence vectors only. The guide is sampled from

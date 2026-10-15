@@ -26,6 +26,12 @@ service. No video upload, telemetry, API key, native helper, Python or ONNX runt
 is used at playback. The optional Personal installer also verifies imported or
 downloaded weights before storing them; failed verification preserves the prior model.
 
+Weight conversion shares one parser between synchronous validation and cooperative
+runtime loading. The runtime yields after a short CPU budget and checks cancellation
+inside large arrays. A fully initialized 256 KiB float16 lookup table preserves
+every decoded parameter bit; regression hashes also cover packed GPU weights.
+IFRNet startup performs no legacy CPU luma readback or legacy warp-shader compilation.
+
 ## Numerical implementation
 
 WebGL2; RGBA16F feature atlases; FP32 packed weights/accumulation; fused PReLU;
@@ -53,6 +59,10 @@ Each pair predicts one fixed time selected from the presentation cadence. A pred
 is not relabeled as a different time when it arrives late. This remains a maximum-2x
 scheduler, not arbitrary 24-to-60/120 temporal resampling. Audio is not delayed to match
 the existing approximately one-source-frame visual buffer.
+The display clock is continuously resampled. A prediction targets an available
+display tick within its usable phase range, accounting for the last measured cost;
+a cold slow prediction cannot permanently prevent future attempts. This scheduling
+does not make inference faster than a device can execute it.
 
 ## Validation boundary
 

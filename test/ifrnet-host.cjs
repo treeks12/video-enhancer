@@ -51,9 +51,11 @@ const count=(g,kind)=>g.allocations.filter(t=>t.kind===kind).length;
 
  // Cancel during shader compilation, keep the existing model usable and free
  // every temporary graph allocation instead of turning cancellation into failure.
- const stateBefore=r.state,c=new AbortController();g.compileHold=true;
- const prepare=r.resize(100,300,'balanced',c.signal);setTimeout(()=>c.abort(),15);
- await assert.rejects(prepare,{name:'AbortError'});g.compileHold=false;
+ const stateBefore=r.state,c=new AbortController(),originalProgram=r.program;
+ let enter;const entered=new Promise(resolve=>{enter=resolve;});
+ r.program=async function(...args){enter();await new Promise(resolve=>c.signal.addEventListener('abort',resolve,{once:true}));return originalProgram.apply(this,args);};
+ const prepare=r.resize(100,300,'balanced',c.signal);await entered;c.abort();
+ await assert.rejects(prepare,{name:'AbortError'});r.program=originalProgram;
  await r.resize(1000,1000);assert.equal(r.state,stateBefore);
 
  // Only endpoint capture is submitted synchronously. A cancelled inference

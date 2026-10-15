@@ -11,6 +11,21 @@ function yieldTask(){
  if(!channel){channel=new MessageChannel();channel.port1.onmessage=()=>queued.shift()?.();channel.port1.unref?.();channel.port2.unref?.();}
  return new Promise(resolve=>{queued.push(resolve);channel.port2.postMessage(0);});
 }
+async function yieldPreparation(signal){
+ // Preparation has no presentation deadline. Give the compositor a frame
+ // before the next CPU slice; inference keeps the faster task-only yield.
+ if(typeof document!=='undefined'&&!document.hidden&&typeof requestAnimationFrame==='function'){
+  await new Promise(resolve=>{
+   let frame=null,timer=null,finished=false;
+   const done=()=>{if(finished)return;finished=true;
+    if(frame!==null)cancelAnimationFrame(frame);if(timer!==null)clearTimeout(timer);
+    signal?.removeEventListener('abort',done);resolve();};
+   frame=requestAnimationFrame(done);timer=setTimeout(done,50);
+   signal?.addEventListener('abort',done,{once:true});if(signal?.aborted)done();
+  });
+ }
+ await yieldTask();
+}
 const MEMORY_LIMIT=256*1024*1024,SHAPE_LIMIT=2;
 function cancelled(){const e=new Error('Neural preparation cancelled.');e.name='AbortError';return e;}
 class Runtime {
@@ -27,7 +42,10 @@ class Runtime {
   if(signal?.aborted)throw cancelled();
   if(!gl||gl.isContextLost())throw new Error('WebGL context unavailable.');
   if(!gl.getExtension('EXT_color_buffer_float'))throw new Error('Neural interpolation requires floating-point render targets.');
-  const engine=new Runtime(gl,S.decodeWeights(bytes),S.dimensions(width,height,profile,step));
+  const model=await S.decodeWeightsAsync(bytes,{signal,yieldTask:()=>yieldPreparation(signal)});
+  if(signal?.aborted)throw cancelled();
+  if(gl.isContextLost())throw new Error('Neural context lost.');
+  const engine=new Runtime(gl,model,S.dimensions(width,height,profile,step));
   try{await engine.prepare(engine.dimensions,signal);return engine;}catch(e){engine.destroy();throw e;}
  }
  reset(){this.epoch++;this.lastSerial=-1;}
@@ -80,6 +98,7 @@ class Runtime {
  location(p,name){if(!p.locations.has(name))p.locations.set(name,this.gl.getUniformLocation(p.program,name));return p.locations.get(name);}
  bind(p,name,tex,unit){const gl=this.gl;gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,tex);gl.uniform1i(this.location(p,name),unit);}
  async attach(graph,state,signal){
+  let taskStart=performance.now();
   const uses=new Map(),pool=new Map();
   for(const op of graph.ops)for(const t of op.inputs){const b=G.baseOf(t);uses.set(b,(uses.get(b)||0)+1);}
   const owned=new Set(graph.tensors);
@@ -97,7 +116,7 @@ class Runtime {
       const k=b.tw+'x'+b.th;if(!pool.has(k))pool.set(k,[]);pool.get(k).push(b.texture);
     }
    }
-   if(i%4===0)await sleep(0);
+   if(performance.now()-taskStart>=2){await yieldPreparation(signal);this.check(signal);taskStart=performance.now();}
   }
  }
  activate(state,d){
