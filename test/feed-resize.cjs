@@ -136,7 +136,22 @@ const code=name=>ref?cp.execFileSync('git',['show',ref+':'+name],{cwd:root,encod
      for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4;data[i]=Math.min(255,(x+shift)*3);data[i+1]=y*3;data[i+2]=90;data[i+3]=255;}
      gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,data);return t;};
     const w=82,h=58,a=make(w,h,0),b=make(w,h,3),out=make(w,h,0);
-    await rt.resize(w,h);const reused=await rt.estimate(a,b,100);
+    await rt.resize(w,h);
+    // Force both X/Y splits and remainder tiles, regardless of the throughput
+    // learned by the preceding feed test. Every shader pixel must still match.
+    const budget=rt.dispatchWork;
+    Object.defineProperty(rt,'dispatchWork',{configurable:true,get:()=>128*1024,set(){}});
+    const originalFence=rt.fence;let interleaved=0;
+    rt.fence=async function(...args){const active=await originalFence.apply(this,args);
+     // A compositor sharing the context can alter all these bindings between
+     // network quanta. Leave a scissor active to verify explicit restoration.
+     gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.bindVertexArray(vao);gl.viewport(0,0,canvas.width,canvas.height);
+     gl.useProgram(program);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+     gl.enable(gl.SCISSOR_TEST);gl.scissor(0,0,1,1);interleaved++;return active;};
+    const reused=await rt.estimate(a,b,100);
+    rt.fence=originalFence;gl.disable(gl.SCISSOR_TEST);
+    Object.defineProperty(rt,'dispatchWork',{configurable:true,writable:true,value:budget});
+    if(interleaved<10)throw new Error('Numerical regression did not exercise tiled/interleaved inference');
     if(!reused?.valid)throw new Error('Reused model did not infer');rt.render(a,b,out,w,h);
     const read=()=>{gl.bindFramebuffer(gl.FRAMEBUFFER,fiCopyFb||=gl.createFramebuffer());gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,out,0);const p=new Uint8Array(w*h*4);gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,p);gl.bindFramebuffer(gl.FRAMEBUFFER,null);return p;};
     const expected=read(),cold=await ReferenceRuntime.create(gl,bytes,w,h);

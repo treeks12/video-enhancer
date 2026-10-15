@@ -20,6 +20,10 @@ Startup weight conversion uses short, cancellable CPU tasks and a bit-exact
 float16 lookup table. IFRNet preparation skips the legacy CPU frame readback and
 unused legacy shaders. A rolling display clock and feasible-tick selection keep
 interpolation from getting stuck after source or refresh-rate changes.
+Neural execution also observes each pair's presentation deadline. Small GPU work
+quanta share time with the spatial compositor; expired work stops before the next
+submission and drains its outstanding fence before another job starts. This
+protects source playback without changing the selected model or resolution.
 
 IFRNet-S is the default interpolation engine in the Store build, with Analytic Flow as an automatic fallback when the neural model cannot run. The result depends on the browser, GPU, source video and motion complexity. Occlusions, scene cuts and very fast movement can still produce artifacts; the extension bypasses uncertain pairs instead of freezing the playback clock.
 
@@ -61,6 +65,12 @@ FSR1 and RAVU with interpolation disabled, including paused-player resizing.
 `node test/neural-startup.cjs` measures cold-start responsiveness while spatial
 enhancement stays active. Set `STARTUP_CPU=4` to simulate a slower CPU; optional
 `BASELINE_REF` comparisons require Git history.
+`node test/neural-budget.cjs` stresses actual GPU convolutions while comparing
+60 fps source playback with spatial enhancement alone and with interpolation.
+It also checks deadline cancellation and recovery on a subsequent feasible
+source. Set `BUDGET_LOAD=1 BUDGET_PROFILE=balanced` for the lighter 60 fps case;
+the default repeated-convolution fixture emulates a slower GPU without artificial
+inference sleeps. It does not reproduce every browser/driver configuration.
 Mock GPU tests validate lifecycle behavior, not visual quality or real GPU speed.
 Live-site playback and interpolation quality still require manual validation.
 

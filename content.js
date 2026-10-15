@@ -1331,12 +1331,19 @@ function fiRequestIfrPair() {
   if(!settings.fiBlockMatch){fiSkipReason="Motion estimation is disabled.";return false;}
   if(!fiHasPrev||fiPairDiscontinuous){fiSkipReason="Waiting for adjacent video frames after a source change or gap.";return false;}
   if(!slot){fiSkipReason=`No extra display slot (${(1000/duration).toFixed(1)} fps video; ${(1000/fiDisplayPeriod).toFixed(1)} Hz display).`;return false;}
-  if(fiGpuBusy){fiSkipReason=`IFRNet is processing a previous pair (${(engine.stats.ms||0).toFixed(1)} ms; ${duration.toFixed(1)} ms source interval).`;return false;}
+  if(fiGpuBusy){fiSkipReason=engine.stats.ms>0?`IFRNet is processing a previous pair (${engine.stats.ms.toFixed(1)} ms last complete inference; ${duration.toFixed(1)} ms source interval).`:
+    "IFRNet is finishing a bounded GPU slice; preserving source playback.";return false;}
+  if(performance.now()>=slot.expires){fiSkipReason="The source frame arrived after its neural display deadline.";return false;}
+  const valid=()=>fiGpuEngine===engine&&serial===fiPairSerial&&isCurrentFeedSession(video,session)&&settings.fiInfra&&settings.fiBlockMatch&&canRender();
   fiNeuralTarget=slot;fiGpuBusy=true;fiMethod="pending";
   fiSkipReason="Computing a neural frame for the next display slot.";
-  engine.estimate(fiPrevTexture,fiCurrTexture,serial,slot.phase).then(result=>{
+  engine.estimate(fiPrevTexture,fiCurrTexture,serial,slot.phase,{deadline:slot.expires,valid,quantumMs:Math.min(4,duration*.12)}).then(result=>{
     if(fiGpuEngine!==engine||!isCurrentFeedSession(video, session)||!settings.fiInfra||!canRender())return;
-    if(!result?.valid)return;
+    if(!result?.valid){
+      if(serial===fiPairSerial){fiMethod="skip";fiSkipReason=engine.lastRun?.reason==='deadline'?
+        "Neural work stopped at its display deadline; preserving source playback.":"The neural pair was replaced before completion; preserving source playback.";}
+      return;
+    }
     fiGpuElapsedMs=result.elapsedMs||0;engine.stats.ms=fiGpuElapsedMs;engine.stats.completed++;
     if(serial!==fiPairSerial||performance.now()>slot.expires){
       engine.stats.late++;
@@ -3069,7 +3076,13 @@ function snapshot() {
       profile: settings.fiProfile,
       edition: globalThis.VE_BUILD?.flavor || "personal",
       analytic: fiGpuEngine?.kind === "analytic" ? {...fiGpuEngine.stats, late:fiAnalyticLate, step:fiAnalyticStep, cooldownMs:Math.max(0,fiAnalyticRetryAt-now)} : null,
-      neural: ["neural","ifrnet"].includes(fiGpuEngine?.kind) ? { ...fiGpuEngine.stats, modelSize: fiGpuEngine.modelSize, debug: settings.fiDebug } : null,
+      neural: ["neural","ifrnet"].includes(fiGpuEngine?.kind) ? { ...fiGpuEngine.stats, modelSize: fiGpuEngine.modelSize, debug: settings.fiDebug,
+        ...(fiGpuEngine.kind==="ifrnet"?{cancelled:fiGpuEngine.diagnostics.cancelledPairs,
+          deadlineCancelled:fiGpuEngine.diagnostics.deadlinePairs,maxDispatchMs:fiGpuEngine.diagnostics.maxDispatchMs,
+          deadlineAgeMs:Number.isFinite(fiGpuEngine.diagnostics.lastDeadlineAt)?Math.max(0,now-fiGpuEngine.diagnostics.lastDeadlineAt):null,
+          lastRun:fiGpuEngine.lastRun?{reason:fiGpuEngine.lastRun.reason,completed:fiGpuEngine.lastRun.completed,
+            elapsedMs:fiGpuEngine.lastRun.elapsedMs,ageMs:Math.max(0,now-fiGpuEngine.lastRun.finishedAt)}:null}:{}),
+      } : null,
       computeMs: fiGpuElapsedMs,
       displayHz: 1000 / fiDisplayPeriod,
       frameIntervalMs: lastVideoFrameDurationMs,

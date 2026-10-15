@@ -10,7 +10,8 @@ vm.runInContext(`
  let fiNeuralResult=null,fiNeuralTarget=null,fiMethod='skip',fiGpuElapsedMs=0,fiGpuReadySerial=-1,fiSkipReason='';
  let lastVideoFrameDurationMs=1000/24,metricReport={videoFps:24},settings={fiInfra:true,fiBlockMatch:true,fiSceneCut:true};
  const fiPrevTexture={},fiCurrTexture={},jobs=[];
- const fiGpuEngine={stats:{ms:0,completed:0,late:0},estimate:()=>new Promise(resolve=>jobs.push(resolve))};
+ let lastOptions;
+ const fiGpuEngine={stats:{ms:0,completed:0,late:0},estimate:(a,b,serial,phase,options)=>{lastOptions=options;return new Promise(resolve=>jobs.push(resolve));}};
  const isCurrentFeedSession=(v,id)=>v===currentVideo&&id===feedSessionId,canRender=()=>true;
  const fiUseClassicFallback=()=>{throw new Error('Unexpected fallback');};
  ${source.slice(start,end)}
@@ -21,11 +22,13 @@ vm.runInContext(`
  globalThis.noSlot=()=>{fiDisplayPeriod=1000/24;};
  globalThis.restoreSlot=()=>{fiDisplayPeriod=1000/60;};
  globalThis.inspect=()=>({busy:fiGpuBusy,method:fiMethod,reason:fiSkipReason,ready:fiGpuReadySerial,...fiGpuEngine.stats});
+ globalThis.options=()=>lastOptions;
 `,ctx);
 const tick=()=>new Promise(r=>setImmediate(r));
 (async()=>{
- assert.equal(ctx.request(),true);ctx.advance();assert.equal(ctx.request(),false);
- assert.match(ctx.inspect().reason,/previous pair/);assert.equal(ctx.inspect().busy,true);
+ assert.equal(ctx.request(),true);assert.ok(ctx.options().deadline>1000);assert.equal(ctx.options().valid(),true);
+ ctx.advance();assert.equal(ctx.options().valid(),false,'the runtime sees pair replacement before dispatching more work');assert.equal(ctx.request(),false);
+ assert.match(ctx.inspect().reason,/bounded GPU slice/);assert.equal(ctx.inspect().busy,true);
  ctx.setNow(1052);ctx.resolveJob(0,{valid:true,elapsedMs:52});await tick();
  assert.equal(ctx.inspect().completed,1,'completed inference is counted even after source pair advanced');
  assert.equal(ctx.inspect().late,1);assert.equal(ctx.inspect().busy,false);

@@ -4,7 +4,7 @@ const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 
 const popup = path.resolve(__dirname,"..","popup.html");
-const screenshot = path.resolve(__dirname,"popup-preview.png");
+const screenshot = path.join(require('node:os').tmpdir(),"video-enhancer-popup-preview.png");
 
 function state(overrides = {}) {
   const base = {
@@ -60,6 +60,17 @@ function state(overrides = {}) {
   await page.waitForTimeout(1100);
   assert.equal(await page.locator("#fiStatusTitle").textContent(),"Interpolation active");
   await page.locator("body").screenshot({path:screenshot});
+  await page.evaluate(()=>{window.__mockState.fi={backend:"IFRNet-S neural (WebGL2)",actualEngine:"ifrnet",computeMs:117,
+    frameIntervalMs:16.667,midPerSec:0,hasPair:true,explain:"Waiting for adjacent video frames after a source change or gap."};});
+  await page.waitForFunction(()=>document.querySelector('#fiStatusTitle').textContent==='Neural inference is behind playback');
+  await page.evaluate(()=>{window.__mockState.fi.neural={lastRun:{reason:'deadline',completed:false,elapsedMs:14,ageMs:100}};});
+  await page.waitForFunction(()=>document.querySelector('#fiStatusTitle').textContent==='Neural work exceeded the frame budget');
+  assert.match(await page.locator('#fiStatusDetail').textContent(),/preserve source playback/);
+  assert.equal(await page.locator('#fiCompute').textContent(),'117.0 ms','a partial cancelled run must not masquerade as a faster completed inference');
+  await page.evaluate(()=>{window.__mockState.fi.neural.lastRun.reason='obsolete';});
+  await page.waitForFunction(()=>document.querySelector('#fiStatusTitle').textContent==='Neural inference is behind playback');
+  await page.evaluate(()=>{window.__mockState.fi.neural.deadlineAgeMs=100;});
+  await page.waitForFunction(()=>document.querySelector('#fiStatusTitle').textContent==='Neural work exceeded the frame budget');
   await page.evaluate(()=>{window.__mockState.settings.fiBlockMatch=false});
   await page.waitForTimeout(1100);
   assert.equal(await page.locator("#fiStatusTitle").textContent(),"Interpolation paused");

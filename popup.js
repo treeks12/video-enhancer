@@ -94,12 +94,17 @@ function renderInterpolation(state) {
   } else if (enabled && state.status === "ok" && state.visible && state.settings.mode !== "off" && state.settings.fiBlockMatch !== false && ["neural","ifrnet"].includes(fi.actualEngine)) {
     tone = number(fi.midPerSec) > 0 ? "ok" : "warn";
     const name=fi.actualEngine==='ifrnet'?'IFRNet-S':'Framegen';
+    const run=fi.neural?.lastRun;
+    const cancelled=(run&&!run.completed&&run.reason==='deadline'&&number(run.ageMs,Infinity)<1500)||
+      (Number.isFinite(fi.neural?.deadlineAgeMs)&&fi.neural.deadlineAgeMs<1500);
     title=number(fi.midPerSec)>0?`${name} active`:
       fi.backend==='initializing'?`Preparing ${name}`:
+      cancelled?'Neural work exceeded the frame budget':
       number(fi.frameIntervalMs)>0&&number(fi.computeMs)>=number(fi.frameIntervalMs)?'Neural inference is behind playback':
       /No extra display slot/.test(fi.explain||'')?'No extra display slot':
       /Waiting for adjacent/.test(fi.explain||'')?'Waiting for adjacent video frames':'Waiting for a neural result';
-    status = fi.explain || "Local neural reconstruction with source-resolution synthesis.";
+    status = cancelled?'Late neural work was stopped to preserve source playback. The selected model quality is unchanged.':
+      fi.explain || "Local neural reconstruction with source-resolution synthesis.";
   }
   if (enabled && state.settings.mode !== "off" && state.settings.fiBlockMatch !== false && state.visible && fi.actualEngine === "analytic") {
     tone=number(fi.midPerSec)>0?"ok":"warn";

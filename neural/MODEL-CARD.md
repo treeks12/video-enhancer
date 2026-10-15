@@ -45,8 +45,15 @@ the next adjacent pair. Features are invalidated on seek/reset/gaps. Inference a
 spatial enhancement share one WebGL context; only four scene-statistic floats are
 read back after a nonblocking fence. Model weights and size-independent shader
 programs persist across source-size changes. Two neural shapes are cached within
-a 256 MiB runtime budget; inference yields between batches of eight operations
-so a source reset can stop obsolete submissions. Separate exact-size spatial
+a 256 MiB runtime budget. Inference groups cheap operations and splits expensive
+ones into scissored atlas regions within a measured work budget. The full viewport
+and shader arithmetic are preserved. Task yields between quanta let the compositor
+continue; work stops when its pair is replaced or its presentation deadline expires.
+The final outstanding fence is drained before the job releases ownership, so
+cancelled attempts cannot accumulate GPU submissions. The time target is bounded
+by the source interval (up to 4 ms); measured fence turnaround includes browser
+polling and shared work and is not reported as pure GPU time.
+Separate exact-size spatial
 targets use a 96 MiB cache budget, retaining only the active working set if it
 alone exceeds that budget.
 
@@ -63,6 +70,9 @@ The display clock is continuously resampled. A prediction targets an available
 display tick within its usable phase range, accounting for the last measured cost;
 a cold slow prediction cannot permanently prevent future attempts. This scheduling
 does not make inference faster than a device can execute it.
+Cancelled partial runs have separate diagnostics and never count as completed
+predictions or replace the measured cost of a full inference. On hardware unable
+to meet the deadline, source playback can continue without neural midpoints.
 
 ## Validation boundary
 
@@ -74,7 +84,10 @@ checkpoint. The fixture is deliberately rejected by the production checksum gate
 The browser regression suite also executes the bundled pretrained model in real
 WebGL2, using synthetic moving sources, resolution/aspect-ratio changes, interrupted
 preparation and rapid video replacement. Resized-kernel output is compared with the
-prior fixed-shape implementation. Spatial-only browser tests exercise FSR1/RAVU and
+prior fixed-shape implementation, including forced X/Y tiling and interleaved GL
+state changes. A repeated-convolution fixture exercises actual GPU overload at
+60 fps, deadline cancellation and subsequent recovery without artificial inference
+sleeps. Spatial-only browser tests exercise FSR1/RAVU and
 paused-player resizing. Extension APIs are mocked in these fixtures; resource tests
 mock WebGL and do not measure shader speed.
 

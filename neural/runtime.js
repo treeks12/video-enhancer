@@ -27,6 +27,8 @@ async function yieldPreparation(signal){
  await yieldTask();
 }
 const MEMORY_LIMIT=256*1024*1024,SHAPE_LIMIT=2;
+const INITIAL_DISPATCH_WORK=32*1024*1024,MIN_DISPATCH_WORK=128*1024,MAX_DISPATCH_WORK=1024*1024*1024;
+const DISPATCH_TARGET_MS=2;
 function cancelled(){const e=new Error('Neural preparation cancelled.');e.name='AbortError';return e;}
 class Runtime {
  constructor(gl,model,dimensions){
@@ -34,7 +36,8 @@ class Runtime {
   this.lastSerial=-1;this.lastSlot=0;this.epoch=0;
   this.textures=new Set();this.programs=new Map();this.layers=new Map();this.memoryBytes=0;
   this.shapes=new Map();this.state=null;this.idle=Promise.resolve();this.resizing=null;
-  this.diagnostics={shapeBuilds:0,shapeHits:0,resizes:0,cancelledPairs:0};
+  this.diagnostics={shapeBuilds:0,shapeHits:0,resizes:0,cancelledPairs:0,deadlinePairs:0,maxDispatchMs:0};
+  this.dispatchWork=INITIAL_DISPATCH_WORK;this.dispatchTargetMs=DISPATCH_TARGET_MS;this.lastRun=null;
   this.fbo=gl.createFramebuffer();this.vao=gl.createVertexArray();this.syncs=new Set();
   this.khr=gl.getExtension('KHR_parallel_shader_compile');
  }
@@ -155,8 +158,13 @@ class Runtime {
   });
   this.resizing=task;return task.finally(()=>{if(this.resizing===task)this.resizing=null;});
  }
- runOps(ops,source=null,phase=.5,swap=false){
+ runOps(ops,source=null,phase=.5,swap=false,tile=null){
   const gl=this.gl;gl.bindVertexArray(this.vao);gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);
+  // The compositor shares this context. Keep the full atlas viewport and
+  // restore scissor before yielding so its draws are never clipped by a tile.
+  gl.disable(gl.SCISSOR_TEST);
+  if(tile){gl.enable(gl.SCISSOR_TEST);gl.scissor(tile.x,tile.y,tile.w,tile.h);}
+  try{
   for(const op of ops){
    const p=op.program;gl.useProgram(p.program);
    gl.uniform2i(this.location(p,'tensorSize'),op.out.w,op.out.h);
@@ -171,39 +179,82 @@ class Runtime {
    if(op.type==='phase')gl.uniform1f(this.location(p,'phase'),phase);
    gl.drawArrays(gl.TRIANGLES,0,3);
   }
-  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+  }finally{gl.disable(gl.SCISSOR_TEST);gl.bindFramebuffer(gl.FRAMEBUFFER,null);}
  }
- async fence(epoch){
+ continueRun(epoch,job){
+  if(job.reason)return false;
+  if(this.destroyed||epoch!==this.epoch)job.reason='obsolete';
+  else if(performance.now()>=job.deadline)job.reason='deadline';
+  else if(job.valid&&!job.valid())job.reason='obsolete';
+  return !job.reason;
+ }
+ async fence(epoch,job){
   const gl=this.gl,sync=gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0);if(!sync)throw new Error('GPU fence creation failed.');
   this.syncs.add(sync);gl.flush();const start=performance.now();
   try{
    while(true){
-    if(this.destroyed||this.epoch!==epoch)return false;
+    if(this.destroyed)return false;
     if(gl.isContextLost())throw new Error('Neural context lost.');
+    // A cancelled job still owns its submitted GPU work. Drain this fence
+    // before releasing busy/idle; otherwise the next source frame can queue
+    // another job ahead of work which the deadline could not actually cancel.
+    this.continueRun(epoch,job);
     const wait=gl.clientWaitSync(sync,0,0);
     if(wait===gl.WAIT_FAILED)throw new Error('Neural GPU fence failed.');
-    if(wait!==gl.TIMEOUT_EXPIRED)return true;
+    if(wait!==gl.TIMEOUT_EXPIRED)return this.continueRun(epoch,job);
     if(performance.now()-start>4000)throw new Error('Neural inference exceeded the safety timeout.');
     await yieldTask();
    }
   }finally{if(this.syncs.delete(sync))gl.deleteSync(sync);}
  }
- async runBatched(ops,epoch,phase=.5,swap=false){
-  // Deleting a fence cannot cancel submitted work. Limit how much obsolete
-  // work may be queued ahead of the compositor, then check reset between batches.
-  for(let i=0;i<ops.length;i+=8){
-   if(this.destroyed||epoch!==this.epoch)return false;
-   this.runOps(ops.slice(i,i+8),null,phase,swap);
-   if(!await this.fence(epoch))return false;
-   await yieldTask();
+ async runBatched(ops,epoch,phase,swap,job){
+  let work=0,hasConv=false,start=performance.now(),limit=this.dispatchWork;
+  const drain=async()=>{
+   if(!work)return this.continueRun(epoch,job);
+   const active=await this.fence(epoch,job),ms=performance.now()-start;
+   this.diagnostics.maxDispatchMs=Math.max(this.diagnostics.maxDispatchMs,ms);
+   if(hasConv&&ms>.05){
+    const measured=work*job.targetMs/ms;
+    this.dispatchWork=Math.max(MIN_DISPATCH_WORK,Math.min(MAX_DISPATCH_WORK,
+      Math.max(this.dispatchWork*.5,Math.min(this.dispatchWork*2,measured))));
+   }
+   work=0;hasConv=false;
+   if(!active)return false;
+   await yieldTask();start=performance.now();limit=this.dispatchWork;
+   return this.continueRun(epoch,job);
+  };
+  for(const op of ops){
+   // Eight network ops can occupy several source intervals on a slower GPU.
+   // Split expensive ops by their arithmetic work, without changing shaders,
+   // weights or tensor resolution. Finish an op before reusing its inputs.
+   const cost=op.layer?op.layer.ci*(op.deconv?4:op.layer.k*op.layer.k):op.type==='warp'?16:4;
+   let x=0,y=0;
+   while(y<op.out.th){
+    if(!this.continueRun(epoch,job)){await drain();return false;}
+    const pixels=Math.max(1,Math.floor((limit-work)/cost));
+    const w=Math.min(op.out.tw-x,pixels),h=x===0&&w===op.out.tw?
+      Math.min(op.out.th-y,Math.max(1,Math.floor(pixels/w))):1;
+    this.runOps([op],null,phase,swap,{x,y,w,h});
+    work+=w*h*cost;hasConv||=!!op.layer;
+    x+=w;if(x===op.out.tw){x=0;y+=h;}
+    // Aggregate cheap dependent operations within the same work quantum;
+    // fencing every concat/phase op would add needless browser task latency.
+    if(work>=limit*.95||performance.now()-start>=2){if(!await drain())return false;}
+   }
   }
-  return true;
+  return drain();
  }
- async estimate(prev,curr,serial,phase=.5){
+ async estimate(prev,curr,serial,phase=.5,options={}){
   if(this.busy||this.resizing)return null;
   this.check();this.busy=true;let done;this.idle=new Promise(r=>{done=r;});
   const gl=this.gl,start=performance.now(),epoch=this.epoch;let completed=false;
+  const job={deadline:Number.isFinite(options.deadline)?options.deadline:Infinity,
+    valid:typeof options.valid==='function'?options.valid:null,reason:'',
+    targetMs:Number.isFinite(options.quantumMs)?Math.max(.5,Math.min(4,options.quantumMs)):DISPATCH_TARGET_MS};
   try{
+   if(!this.continueRun(epoch,job))return null;
+   this.dispatchWork=Math.max(MIN_DISPATCH_WORK,Math.min(MAX_DISPATCH_WORK,this.dispatchWork*job.targetMs/this.dispatchTargetMs));
+   this.dispatchTargetMs=job.targetMs;
    const reuse=this.lastSerial===serial-1,prevSlot=reuse?this.lastSlot:0,currSlot=1-prevSlot;
    // Snapshot endpoint RGB before yielding: renderer pair textures can advance.
    if(!reuse)this.runOps(this.enc[prevSlot].graph.ops.slice(0,1),prev);
@@ -214,10 +265,11 @@ class Runtime {
    gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.flush();const submitMs=performance.now()-start;
    // draw() gets to present the source before expensive convolutions.
    await yieldTask();
-   if(!reuse&&!await this.runBatched(this.enc[prevSlot].graph.ops.slice(1),epoch,phase))return null;
-   if(!await this.runBatched(this.enc[currSlot].graph.ops.slice(1),epoch,phase))return null;
-   if(!await this.runBatched(this.dec.graph.ops,epoch,phase,prevSlot===1))return null;
-   if(this.destroyed||epoch!==this.epoch)return null;
+   if(!await this.fence(epoch,job))return null;
+   if(!reuse&&!await this.runBatched(this.enc[prevSlot].graph.ops.slice(1),epoch,phase,false,job))return null;
+   if(!await this.runBatched(this.enc[currSlot].graph.ops.slice(1),epoch,phase,false,job))return null;
+   if(!await this.runBatched(this.dec.graph.ops,epoch,phase,prevSlot===1,job))return null;
+   if(!this.continueRun(epoch,job))return null;
    const stats=new Float32Array(4);
    gl.bindFramebuffer(gl.FRAMEBUFFER,this.fbo);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,this.statsTexture,0);
    gl.readPixels(0,0,1,1,gl.RGBA,gl.FLOAT,stats);gl.bindFramebuffer(gl.FRAMEBUFFER,null);
@@ -227,6 +279,8 @@ class Runtime {
     sceneCut:stats[0]>.11&&stats[1]>.35,stats:Array.from(stats),valid:true};
   }finally{
    if(!completed){this.lastSerial=-1;this.diagnostics.cancelledPairs++;}
+   if(job.reason==='deadline'){this.diagnostics.deadlinePairs++;this.diagnostics.lastDeadlineAt=performance.now();}
+   this.lastRun={reason:job.reason,elapsedMs:performance.now()-start,finishedAt:performance.now(),completed};
    this.busy=false;done();
   }
  }
