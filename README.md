@@ -61,7 +61,7 @@ of delay. Fully completed
 encoder features can serve the next adjacent pair even if its predecessor's
 decoder misses its deadline; partially computed features are never reused.
 
-IFRNet-S is the default interpolation engine. Framegen v7-small is bundled as an experimental alternative and may be more demanding or less stable. WebGL2 runs the same bundled model when WebGPU is unavailable; Analytic Flow is the fallback when neural inference cannot run. Results depend on the browser, GPU, source video and motion complexity. Occlusions, scene cuts and very fast movement can still produce artifacts.
+IFRNet-S is the default interpolation engine in the Store build. WebGL2 runs the same bundled model when WebGPU is unavailable; Analytic Flow is the fallback when neural inference cannot run. Results depend on the browser, GPU, source video and motion complexity. Occlusions, scene cuts and very fast movement can still produce artifacts.
 
 [Install for Firefox](https://addons.mozilla.org/en-US/firefox/addon/video-enhancer-for-firefox/) · [Download releases](https://github.com/treeks12/video-enhancer/releases) · [Project website](https://treeks12.github.io/video-enhancer/)
 
@@ -81,7 +81,8 @@ python tools/package.py
 ```
 
 On Windows, `./build.ps1` runs the same builder. Packages are written to `dist/`.
-The unified release bundles IFRNet-S and Framegen v7-small. No model download is required. Framegen weights retain their noncommercial/personal-use license; see the included notices.
+The Store edition bundles IFRNet-S and excludes the optional Personal Framegen
+backend. No model download is required for Store packages.
 
 ### Validation
 

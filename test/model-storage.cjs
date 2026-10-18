@@ -6,17 +6,5 @@ const M=require('../neural-model.js');
 const stored=structuredClone(data);data[M.KEY].base64='AAAA';await assert.rejects(()=>M.load());data=structuredClone(stored);data[M.KEY].manifest['film.0.bias'].offset=-1;await assert.rejects(()=>M.load());
 await assert.rejects(()=>M.fetchBounded('https://evil.example/code.js',100));
 let cancelled=false;global.fetch=async()=>({ok:true,headers:{get:()=>null},body:{getReader(){let read=0;return {async read(){return read++?{done:true}:{done:false,value:new Uint8Array(101)}},async cancel(){cancelled=true;}}}}});
-await assert.rejects(()=>M.fetchBounded(M.BASE+'rt_v7s.bin',100));assert.ok(cancelled);
-// Firefox fetch values may originate in another realm; bundled loading must
-// normalize them before strict architecture validation.
-data={};
-const vm=require('node:vm'),fs=require('node:fs');
-const raw=fs.readFileSync(require('node:path').join(__dirname,'../models/rt_v7s.json'),'utf8');
-const bytes=fs.readFileSync(require('node:path').join(__dirname,'../models/rt_v7s.bin'));
-const foreign=vm.runInNewContext('new Uint8Array(values).buffer',{values:[...bytes]});
-assert.equal(foreign instanceof ArrayBuffer,false);
-global.fetch=async url=>url.endsWith('.json')?{ok:true,text:async()=>raw}:{ok:true,arrayBuffer:async()=>foreign};
-const bundled=await M.load();assert.equal(bundled.binary instanceof ArrayBuffer,true);
-assert.deepEqual(Buffer.from(bundled.binary),bytes);
-console.log('PASS: atomic model storage, binary checksum, schema rejection, download origin and streaming byte limits');
+await assert.rejects(()=>M.fetchBounded(M.BASE+'rt_v7s.bin',100));assert.ok(cancelled);console.log('PASS: atomic model storage, binary checksum, schema rejection, download origin and streaming byte limits');
 })().catch(e=>{console.error(e);process.exitCode=1;});

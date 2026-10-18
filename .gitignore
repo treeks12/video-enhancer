@@ -10,8 +10,6 @@ test/rife-webgpu/
 # User-installed weights stay local; this pinned MIT checkpoint is bundled.
 models/*
 !models/ifrnet.bin
-!models/rt_v7s.bin
-!models/rt_v7s.json
 
 # Local delivery artifacts
 HANDOFF*

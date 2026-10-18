@@ -222,7 +222,7 @@ toggle.addEventListener("click",()=>send("fv-toggle").then(render).catch(unavail
 reload.addEventListener("click",async()=>{await ext.tabs.reload(tabId);window.close()});
 
 async function init() {
-  try { $("#version").textContent=`v${ext.runtime.getManifest().version}`; } catch { $("#version").textContent="v—"; }
+  try { $("#version").textContent=`v${ext.runtime.getManifest().version} · ${globalThis.VE_BUILD?.personal===false?"Store":"Personal"}`; } catch { $("#version").textContent="v—"; }
   const [tab] = await ext.tabs.query({active:true,currentWindow:true}); tabId = tab?.id;
   if (tabId === undefined) throw new Error("Active tab not found");
   reload.disabled = false; render(await send("fv-status"));

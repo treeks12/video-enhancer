@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('packager',ROOT/'tools/package.py');p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 counts=[]
 for browser in ['firefox','chromium']:
- for flavor in ['store','personal','unified']:
+ for flavor in ['store','personal']:
   entries=p.entries_for(browser,flavor);manifest=json.loads(entries['manifest.json'])
   with tempfile.TemporaryDirectory() as directory:
    d=Path(directory)
@@ -22,7 +22,7 @@ for browser in ['firefox','chromium']:
    '''
    subprocess.run(['node','-e',script],check=True)
    p.write_zip(d/'one.zip',entries);p.write_zip(d/'two.zip',entries);assert (d/'one.zip').read_bytes()==(d/'two.zip').read_bytes()
-  if flavor in ('personal','unified'):
+  if flavor=='personal':
    for n in ['fi-neural-runtime.js','neural-model.js','fi-neural.js','neural/runtime.js','neural/graph.js','neural/background.js']:
     assert entries[n]==(ROOT/n).read_bytes(),'Optional runtime modified by builder: '+n
   else:
@@ -33,17 +33,6 @@ for browser in ['firefox','chromium']:
    assert entries['models/ifrnet.bin']==(ROOT/'models/ifrnet.bin').read_bytes()
    assert 'neural/background.js' not in entries and not any(n.startswith('third_party/framegen/') for n in entries)
    assert b'value="neural"'not in entries['popup.html'] and b'value="ifrnet"' in entries['popup.html']
-  if flavor=='unified':
-   assert entries['models/rt_v7s.bin']==(ROOT/'models/rt_v7s.bin').read_bytes()
-   assert entries['models/rt_v7s.json']==(ROOT/'models/rt_v7s.json').read_bytes()
-   assert entries['third_party/framegen/WEIGHTS_LICENSE.md']==(ROOT/'third_party/framegen/WEIGHTS_LICENSE.md').read_bytes()
-   assert 'optional_host_permissions' not in manifest
-   assert b'value="neural"' in entries['popup.html']
-   assert b'install AI weights' not in entries['popup.html']
-   assert b'no model installation is required' in entries['models.html']
-   for n in entries:
-    if n.startswith('_locales/') and n.endswith('/messages.json'):
-     assert json.loads(entries[n])['extensionName']==json.loads((ROOT/n).read_bytes())['extensionName']
   counts.append({'browser':browser,'edition':flavor,'files':len(entries),'result':'PASS'})
 for invalid in ['/* PERSONAL_ONLY_END */','/* PERSONAL_ONLY_BEGIN */','<!-- PERSONAL_ONLY_BEGIN --><!-- PERSONAL_ONLY_BEGIN --><!-- PERSONAL_ONLY_END -->']:
  try:p.strip_personal(invalid);raise AssertionError('Malformed marker accepted')
