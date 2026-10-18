@@ -41,7 +41,10 @@
     // Search the whole usable interval. Starting at .38 could skip its only
     // display tick and reject every pair at a stable source/display phase.
     const first=Math.ceil((anchor+duration*.25-reference)/period);
-    const last=Math.floor((anchor+duration*.85-reference)/period);
+    // A refresh just past .85 can be the only reachable tick at fractional
+    // source/display ratios. Infer its actual phase instead of discarding it
+    // or relabelling a prediction made for an earlier tick.
+    const last=Math.floor((Math.min(anchor+duration*.95,anchor+duration-1)-reference)/period);
     if(first>last)return null;
     // Prefer a tick the last measured inference can reach. A cold slow result
     // must not disable future attempts: keep the latest usable tick available.
@@ -49,7 +52,7 @@
     const earliest=Math.max(first,Math.min(last,ready));
     const index=Math.max(earliest,Math.min(last,Math.round((anchor+duration*.5-reference)/period)));
     const time=reference+index*period;
-    const phase=Math.max(.25,Math.min(.85,(time-anchor)/duration));
+    const phase=Math.max(.25,Math.min(.95,(time-anchor)/duration));
     return {time,phase,expires:Math.min(anchor+duration-1,time+period*.6)};
   }
   function validFlow(x,y,limit) { return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x) <= limit && Math.abs(y) <= limit; }

@@ -26,8 +26,9 @@ for browser in ['firefox','chromium']:
    for n in ['fi-neural-runtime.js','neural-model.js','fi-neural.js','neural/runtime.js','neural/graph.js','neural/background.js']:
     assert entries[n]==(ROOT/n).read_bytes(),'Optional runtime modified by builder: '+n
   else:
-   for script in manifest['content_scripts'][0]['js']:
-    assert not any(t in entries[script] for t in [b'FiNeural.',b'cdn.jsdelivr.net',b'raw.githubusercontent.com'])
+   for group in manifest['content_scripts']:
+    for script in group['js']:
+     assert not any(t in entries[script] for t in [b'FiNeural.',b'cdn.jsdelivr.net',b'raw.githubusercontent.com'])
    assert 'background'not in manifest and 'options_ui'not in manifest and 'optional_host_permissions'not in manifest
    assert entries['models/ifrnet.bin']==(ROOT/'models/ifrnet.bin').read_bytes()
    assert 'neural/background.js' not in entries and not any(n.startswith('third_party/framegen/') for n in entries)

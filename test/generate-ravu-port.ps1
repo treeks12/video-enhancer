@@ -1,5 +1,7 @@
 param(
-  [string]$Root = (Split-Path -Parent $PSScriptRoot)
+  [string]$Root = (Split-Path -Parent $PSScriptRoot),
+  [switch]$Offline,
+  [switch]$Check
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,10 +15,15 @@ $target = [IO.Path]::GetFullPath((Join-Path $rootPath "third_party\ravu-lite"))
 if (-not $target.StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase)) {
   throw "Destino saiu do workspace: $target"
 }
-[IO.Directory]::CreateDirectory($target) | Out-Null
+if (-not $Check) { [IO.Directory]::CreateDirectory($target) | Out-Null }
 
-$hook = (Invoke-WebRequest -UseBasicParsing "$raw/ravu-lite-ar-r3.hook").Content
-$license = (Invoke-WebRequest -UseBasicParsing "$raw/LICENSE").Content
+if ($Offline) {
+  $hook = [IO.File]::ReadAllText((Join-Path $target "ravu-lite-ar-r3.hook"))
+  $license = [IO.File]::ReadAllText((Join-Path $target "LICENSE"))
+} else {
+  $hook = (Invoke-WebRequest -UseBasicParsing "$raw/ravu-lite-ar-r3.hook").Content
+  $license = (Invoke-WebRequest -UseBasicParsing "$raw/LICENSE").Content
+}
 $utf8 = [Text.UTF8Encoding]::new($false)
 
 function Assert-Hash([string]$Text, [string]$Expected, [string]$Name) {
@@ -66,6 +73,91 @@ float loadLuma(ivec2 p) {
 
 $body
 "@
+
+# Split classification from the filter to bound synchronous driver compilation.
+# Keep upstream math and tap order; adapt row encoding and repeated tap control.
+$step1 = $step1.Replace("`r`n", "`n")
+$lumaStart = $step1.IndexOf("float luma0")
+$classifyEnd = $step1.IndexOf("float coord_y =")
+$filterStart = $step1.IndexOf("vec4 res =")
+$eigenStart = $step1.IndexOf("float a = abd.x")
+if ($lumaStart -lt 0 -or $eigenStart -le $lumaStart -or $classifyEnd -le $eigenStart -or $filterStart -le $classifyEnd) {
+  throw "RAVU classification/filter boundaries changed"
+}
+$tapCount = [regex]::Matches($step1, 'w = texture\(u_lut, vec2\(').Count
+if ($tapCount -ne 13) { throw "RAVU filter no longer has thirteen LUT taps" }
+$classifyTail = @'
+float classificationRow = clamp((angle * 4.0 + strength) * 3.0 + coherence, 0.0, 287.0);
+outColor = vec4(mod(classificationRow, 256.0) / 255.0, floor(classificationRow / 256.0) / 255.0, 0.0, 1.0);
+}
+'@
+$gradientBody = @'
+vec3 abd = vec3(0.0);
+for (int gradient = 0; gradient < u_gradient_count; gradient++) {
+  ivec2 offset = ivec2(gradient / 3 - 1, gradient % 3 - 1);
+  ivec2 center = base + offset;
+  float gx = (loadLuma(center + ivec2(1, 0)) - loadLuma(center - ivec2(1, 0))) / 2.0;
+  float gy = (loadLuma(center + ivec2(0, 1)) - loadLuma(center - ivec2(0, 1))) / 2.0;
+  float weight = 0.1018680644198163;
+  if (offset.x == 0 || offset.y == 0) weight = 0.11543163961422666;
+  if (gradient == 4) weight = 0.13080118386382833;
+  abd += vec3(gx * gx, gx * gy, gy * gy) * weight;
+}
+'@
+$filterTail = @'
+vec4 res = vec4(0.0), w;
+vec4 lo = vec4(0.0), hi = vec4(0.0), lo2 = vec4(0.0), hi2 = vec4(0.0), wg, cg4, cg4_1;
+// Runtime iteration avoids duplicated anti-ringing code and private arrays.
+// Re-fetch the same luma texels in the original tap/accumulator order; the
+// LUT's integer coordinates match its fixed 13 x 288 NEAREST sampling.
+vec2 rowBytes = round(texelFetch(u_classification, base, 0).rg * 255.0);
+int lutRow = clamp(int(rowBytes.r) + int(rowBytes.g) * 256, 0, textureSize(u_lut, 0).y - 1);
+for (int tap = 0; tap < textureSize(u_lut, 0).x; tap++) {
+  ivec2 offset = ivec2(tap / 5 - 2, tap % 5 - 2);
+  float nearLuma = loadLuma(base + offset);
+  float farLuma = nearLuma;
+  if (tap < 12) farLuma = loadLuma(base - offset);
+  w = texelFetch(u_lut, ivec2(tap, lutRow), 0);
+  if (tap == 12) {
+    res += nearLuma * w;
+  } else {
+    res += nearLuma * w + farLuma * w.wzyx;
+  }
+  if (tap == 2 || tap == 6 || tap == 7 || tap == 8 || tap == 10 || tap == 11 || tap == 12) {
+    wg = max(vec4(0.0), w);
+    cg4 = vec4(0.1 + nearLuma, 1.1 - nearLuma, 0.1 + farLuma, 1.1 - farLuma);
+    cg4_1 = cg4;
+    cg4 *= cg4;cg4 *= cg4;cg4 *= cg4;cg4 *= cg4;cg4 *= cg4;
+    if (tap == 12) {
+      hi += cg4.x * wg;
+      lo += cg4.y * wg;
+    } else {
+      hi += cg4.x * wg + cg4.z * wg.wzyx;
+      lo += cg4.y * wg + cg4.w * wg.wzyx;
+    }
+    cg4 *= cg4_1;
+    if (tap == 12) {
+      hi2 += cg4.x * wg;
+      lo2 += cg4.y * wg;
+    } else {
+      hi2 += cg4.x * wg + cg4.z * wg.wzyx;
+      lo2 += cg4.y * wg + cg4.w * wg.wzyx;
+    }
+  }
+}
+lo = 1.1 - lo2 / lo;
+hi = hi2 / hi - 0.1;
+res = mix(res, clamp(res, lo, hi), 0.800000);
+outColor = res;
+}
+'@
+$classify = $step1.Substring(0, $lumaStart).Replace("uniform sampler2D u_lut;`n", "").Replace(
+  "uniform sampler2D u_source;", "uniform sampler2D u_source;`nuniform int u_gradient_count;"
+) + $gradientBody + "`n" + $step1.Substring($eigenStart, $classifyEnd - $eigenStart) + $classifyTail
+$step1 = $step1.Substring(0, $lumaStart).Replace(
+  "uniform sampler2D u_lut;",
+  "uniform sampler2D u_lut;`nuniform sampler2D u_classification;"
+) + $filterTail
 
 $compose = @'
 #version 300 es
@@ -137,19 +229,37 @@ $port = @"
  */
 globalThis.__fvRavuShaders = Object.freeze({
   commit: "$commit",
+  classify: String.raw``$classify``,
   step1: String.raw``$step1``,
   compose: String.raw``$compose``,
 });
 "@
 
+# Deterministic UTF-8/LF output on every generation host.
+$port = $port.Replace("`r`n", "`n").TrimEnd("`r", "`n") + "`n"
+
 $hex = $lines[201].Trim()
 if ($hex.Length -ne 119808) { throw "RAVU LUT has an unexpected size" }
 $lut = [Convert]::FromHexString($hex)
 
-[IO.File]::WriteAllText((Join-Path $target "ravu-lite-ar-r3.hook"), $hook, $utf8)
-[IO.File]::WriteAllText((Join-Path $target "LICENSE"), $license, $utf8)
-[IO.File]::WriteAllBytes((Join-Path $target "ravu-lite-lut3.bin"), $lut)
-[IO.File]::WriteAllText((Join-Path $target "ravu-lite-webgl2.js"), $port, $utf8)
+$outputs = @{
+  "ravu-lite-ar-r3.hook" = $utf8.GetBytes($hook)
+  "LICENSE" = $utf8.GetBytes($license)
+  "ravu-lite-lut3.bin" = $lut
+  "ravu-lite-webgl2.js" = $utf8.GetBytes($port)
+}
+foreach ($name in $outputs.Keys) {
+  $destination = Join-Path $target $name
+  if ($Check) {
+    if (-not [IO.File]::Exists($destination) -or
+        [Convert]::ToBase64String([IO.File]::ReadAllBytes($destination)) -cne [Convert]::ToBase64String($outputs[$name])) {
+      throw "Generated output differs: $name"
+    }
+  } else {
+    [IO.File]::WriteAllBytes($destination, $outputs[$name])
+  }
+}
+if ($Check) { Write-Output "PASS: generated RAVU artifacts match byte for byte"; return }
 
 Write-Output "Generated RAVU-lite port from $commit"
 Write-Output "LUT bytes: $($lut.Length)"

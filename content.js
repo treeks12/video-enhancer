@@ -38,7 +38,20 @@ function pickLargestVideo(videos, vw, vh) {
   let best = null;
   let bestScore = 0;
   for (const v of videos) {
-    const score = visibleArea(v.getBoundingClientRect(), vw, vh) * playingWeight(v);
+    const area = visibleArea(v.getBoundingClientRect(), vw, vh);
+    if (!area) continue;
+    // Feeds retain decoded players behind hidden/transparent wrappers. Their
+    // rectangles still overlap the viewport, but they must not own the model
+    // or an explicitly visible overlay above the actual feed video.
+    let painted;
+    try { painted = v.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }); }
+    catch { /* Use computed visibility when this API is unavailable. */ }
+    if (painted === false) continue;
+    if (painted !== true && typeof getComputedStyle === "function") {
+      const style = getComputedStyle(v);
+      if (style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) === 0) continue;
+    }
+    const score = area * playingWeight(v);
     if (score > bestScore) {
       bestScore = score;
       best = v;
@@ -356,7 +369,7 @@ const COMPARE_LEFT_ID = "fv-enhancer-compare-left";
 const COMPARE_RIGHT_ID = "fv-enhancer-compare-right";
 const INTERACTION_PAUSE_MS = 450;
 const INTERACTION_PREVIEW_MS = 67;
-let canvas, gl, program, easuProgram, rcasProgram, ravuStepProgram, ravuComposeProgram;
+let canvas, gl, program, easuProgram, rcasProgram, ravuClassifyProgram, ravuStepProgram, ravuComposeProgram;
 let compareLeftEl = null;
 let compareRightEl = null;
 let flashTimer = null;
@@ -364,14 +377,15 @@ let vao, texture;
 let uTexLoc = null, uTexelLoc = null, uStrengthLoc = null, uCompareLoc = null;
 let easuTexLoc = null;
 let rcasTexLoc = null, rcasTexelLoc = null, rcasStrengthLoc = null, rcasCompareLoc = null;
-let ravuSourceLoc = null, ravuLutLoc = null;
+let ravuSourceLoc = null, ravuLutLoc = null, ravuClassificationLoc = null, ravuClassifySourceLoc = null;
 let ravuComposeSourceLoc = null, ravuPackedLoc = null;
 let ravuSourceSizeLoc = null, ravuOutputTexelLoc = null, ravuCompareLoc = null;
 let framebuffer, upscaledTexture;
 let intermediateWidth = 0, intermediateHeight = 0;
-let ravuFramebuffer, ravuPackedTexture, ravuLutTexture;
+let ravuFramebuffer, ravuPackedTexture, ravuLutTexture, ravuClassifyFramebuffer, ravuClassifyTexture;
 let ravuWidth = 0, ravuHeight = 0;
 let ravuLutReady = false, ravuLutPromise = null, ravuLutError = "";
+let ravuLutData = null;
 let ravuShadersPromise = null, ravuShaderError = "";
 let ravuRetryPromise = null, ravuPendingCaptureVideo = null;
 let ravuRetryGeneration = 0;
@@ -394,6 +408,8 @@ let feedSessionId = 0;
 let blockedVideo = null;
 let frameWatchdog = null;
 let useAnimationFallback = false;
+let videoCallbackHealth = null;
+let animationFrameClock = null;
 let lastFreshFrameTime = null;
 let rafId = null;
 let scheduledKind = null;
@@ -402,6 +418,7 @@ let overlayVisible = true;
 let scrolling = false;
 let scrollResumeTimer = null;
 let videoInViewport = true;
+let hasVisibleVideo = true;
 let lastError = "";
 let status = "idle"; // "ok" | "tainted" | "error" | "no-webgl" | "no-video"
 let layoutDirty = true;
@@ -411,6 +428,8 @@ let activePageListeners = false;
 let discoveryListeners = false;
 let videoResizeObserver = null;
 let videoIntersectionObserver = null;
+let videoLayoutObserver = null, layoutObservedVideo = null, layoutObservedParent = null;
+let layoutObservedCandidates = [];
 let settingsLoaded = false;
 let settings = normalizeSettings(DEFAULT_SETTINGS);
 let lastPresentedFrames = null;
@@ -491,10 +510,20 @@ let fiGpuInitSize = null;
 let fiGpuController = null;
 let fiGpuGeneration = 0;
 let fiNeuralFailure = "";
+let fiWebGpuFailure = "";
 let fiAnalyticStep = 0, fiAnalyticSlow = 0;
 let fiAnalyticLate = 0, fiAnalyticRetryAt = 0;
 let fiNeuralResult = null, fiNeuralTarget = null;
+let fiBufferedMode = false, fiBufferedEpoch = 0, fiHasHistory = false;
+let fiHistoryTexture = null, fiBufferedW = 0, fiBufferedH = 0;
+const fiBufferedTextures = [], fiBufferedPairs = new Map();
+let fiPresentedAnchor = null;
 let fiPairAnchorTime = 0, fiDisplayReference = 0;
+let fiDisplayLeadMs = 0;
+const fiDisplayLeads = [];
+let fiDisplayCallbackDelayMs = 0;
+const fiDisplayCallbackDelays = [];
+let fiDirectActive = false, fiDirectLastPrediction = null;
 let fiGpuState = "idle";
 let fiGpuError = "";
 let fiGpuBusy = false;
@@ -520,6 +549,7 @@ function ensureFeedSessionManager() {
 }
 
 function beginFeedSession(video, { force = false, reason = "source changed" } = {}) {
+  const previousId = feedSessionId;
   const manager = ensureFeedSessionManager();
   if (manager) {
     activeFeedSession = manager.ensure(video, { force, reason });
@@ -528,6 +558,10 @@ function beginFeedSession(video, { force = false, reason = "source changed" } = 
     // Self-checks execute content.js without the browser's script bundle.
     feedSessionId++;
     activeFeedSession = { id: feedSessionId, video, active: true };
+  }
+  if (feedSessionId !== previousId) {
+    fiDisplayLeadMs = fiDisplayCallbackDelayMs = 0;
+    fiDisplayLeads.length = fiDisplayCallbackDelays.length = 0;
   }
   return activeFeedSession;
 }
@@ -548,7 +582,7 @@ function isCurrentFeedSession(video, id = feedSessionId) {
 }
 
 function canRender() {
-  return settings.mode !== "off" && overlayVisible && (!currentVideo || currentVideo !== blockedVideo) &&
+  return settings.mode !== "off" && overlayVisible && hasVisibleVideo && (!currentVideo || currentVideo !== blockedVideo) &&
     (!scrolling || settings.interaction !== "smooth") && videoInViewport &&
     (typeof document === "undefined" || !document.hidden);
 }
@@ -575,6 +609,7 @@ function updateCanvasVisibility() {
   }
   if (compareLeftEl) compareLeftEl.style.visibility = next;
   if (compareRightEl) compareRightEl.style.visibility = next;
+  fiGpuEngine?.compositor?.setVisible(fiDirectActive && next === "visible");
 }
 
 function modeDisplayName(mode) {
@@ -723,6 +758,8 @@ function resetMetricWindow(now) {
 }
 
 function resetVideoFrameHistory() {
+  videoCallbackHealth = null;
+  animationFrameClock = null;
   lastFreshFrameTime = null;
   lastPresentedFrames = null;
   lastMediaTime = null;
@@ -859,7 +896,8 @@ function fiExplainStatus() {
   if (mids < 1 && reals > 5) {
     return "No stable midpoints — prioritizing the real cadence instead of forcing late frames.";
   }
-  return `Motion midpoints ~${mids.toFixed(0)}/s · anchors ~${reals.toFixed(0)}/s · confidence ${(fiConfidence * 100).toFixed(0)}%. If playback stutters, disable smoothing or use FSR1.`;
+  const confidence = fiGpuEngine?.kind === "ifrnet" ? "" : ` · confidence ${(fiConfidence * 100).toFixed(0)}%`;
+  return `Motion midpoints ~${mids.toFixed(0)}/s · anchors ~${reals.toFixed(0)}/s${confidence}.`;
 }
 
 /**
@@ -901,7 +939,8 @@ function publishMetrics(now) {
     midFps: metricWindow.midDrawn * 1000 / elapsed,
     videoFps: metricWindow.mediaDelta
       ? metricWindow.mediaFrames / metricWindow.mediaDelta
-      : (metricWindow.videoTotal ? metricWindow.videoTotal * 1000 / elapsed : 0),
+      : (metricWindow.videoTotal ? metricWindow.videoTotal * 1000 / elapsed /
+        (currentVideo?.playbackRate > 0 ? currentVideo.playbackRate : 1) : 0),
     missed: metricWindow.missed,
     missedPct: totalFrames ? metricWindow.missed * 100 / totalFrames : 0,
     videoDropped: metricWindow.videoDropped,
@@ -953,6 +992,26 @@ function recordVideoFrame(now, metadata) {
     lastPlaybackTotal = quality.totalVideoFrames;
   }
   if (!metadata) {
+    if (quality) {
+      const total = quality.totalVideoFrames;
+      if (!animationFrameClock || total < animationFrameClock.at(-1).total) animationFrameClock = [];
+      const samples = animationFrameClock;
+      if (!samples.length || total > samples.at(-1).total) {
+        samples.push({ time: now, total });
+        if (samples.length > 24) samples.shift();
+        // Fit progress over several source frames. Short fixed windows alias
+        // 24 fps against 60 Hz and alternate between false 20/26.7 fps clocks.
+        if (samples.length >= 8 && now - samples[0].time >= 200) {
+          let sx = 0, sy = 0, sxx = 0, sxy = 0;
+          for (const sample of samples) {
+            const x = sample.total - samples[0].total, y = sample.time - samples[0].time;
+            sx += x; sy += y; sxx += x * x; sxy += x * y;
+          }
+          const n = samples.length, duration = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+          if (duration >= 1 && duration <= 250) lastVideoFrameDurationMs = duration;
+        }
+      }
+    }
     fiResumeGap = qualityDelta > 1 || fiIsTimingGap(callbackDelta, lastVideoFrameDurationMs);
     return qualityDelta === null || qualityDelta > 0;
   }
@@ -1033,6 +1092,10 @@ function cancelFiMid() {
 }
 
 function resetFiPairState(preserveBudget = false) {
+  fiBufferedEpoch++;
+  fiBufferedPairs.clear();
+  fiHasHistory = false;
+  fiPresentedAnchor = null;
   fiPairDiscontinuous = false;
   fiGpuReadySerial = -1;
   fiNeuralResult = fiNeuralTarget = null;
@@ -1143,10 +1206,30 @@ function fiWarmGpu() {
       try {
         const bytes = await VENeuralClient.load();
         if (generation !== fiGpuGeneration || controller.signal.aborted || !gl || !currentVideo?.videoWidth) return null;
-        const engine = await VENeuralRuntime.create(gl, bytes, width, height, profile, 0, controller.signal);
+        let engine = null;
+        if (!fiWebGpuFailure && typeof VENeuralWebGPU !== "undefined" && globalThis.navigator?.gpu) {
+          try { engine = await VENeuralWebGPU.create(gl, bytes, width, height, profile, 0, controller.signal, {captureMode:"snapshot",filteredSources:true,genericConcat:true,genericFlow:true,stagedStorage:true}); }
+          catch (error) {
+            if (controller.signal.aborted || error.name === "AbortError") throw error;
+            if (generation === fiGpuGeneration) fiWebGpuFailure = String(error.message || error);
+            log("IFRNet WebGPU unavailable; using WebGL2:", String(error.message || error));
+          }
+        }
+        if (!engine) engine = await VENeuralRuntime.create(gl, bytes, width, height, profile, 0, controller.signal);
+        if (engine.backend === "webgpu" && typeof VENeuralCompositor !== "undefined" && (engine.externalSource || engine.videoSnapshot)) {
+          try {
+            if (!ravuLutData) await loadRavuLut();
+            if (ravuLutData) await engine.prepareCompositor(canvas, ravuLutData, controller.signal);
+          } catch (error) {
+            await engine.destroy();
+            if (controller.signal.aborted || error.name === "AbortError") throw error;
+            if (generation === fiGpuGeneration) fiWebGpuFailure = String(error.message || error);
+            engine = await VENeuralRuntime.create(gl, bytes, width, height, profile, 0, controller.signal);
+          }
+        }
         engine.kind = "ifrnet"; engine.sourceW = width; engine.sourceH = height;
-        engine.whenLost = new Promise(() => {}); engine.stats = {completed:0,late:0,ms:0};
-        engine.modelSize = {width:engine.dimensions.activeW,height:engine.dimensions.activeH};
+        engine.whenLost ||= new Promise(() => {}); engine.stats = {completed:0,late:0,ms:0};
+        if (engine.backend !== "webgpu") engine.modelSize = {width:engine.dimensions.activeW,height:engine.dimensions.activeH};
         return engine;
       } catch (error) {
         if (controller.signal.aborted || error.name === "AbortError") return null;
@@ -1201,7 +1284,7 @@ function fiResizeIfrGpu(width,height) {
   fiGpuInit=engine.resize(width,height,profile,controller.signal).then(()=>{
     if(generation!==fiGpuGeneration||fiGpuEngine!==engine||controller.signal.aborted)return;
     engine.sourceW=width;engine.sourceH=height;
-    engine.modelSize={width:engine.dimensions.activeW,height:engine.dimensions.activeH};
+    if(engine.backend!=="webgpu")engine.modelSize={width:engine.dimensions.activeW,height:engine.dimensions.activeH};
     fiGpuState="ready";fiGpuError="";
   }).catch(error=>{
     if(generation!==fiGpuGeneration||fiGpuEngine!==engine)return;
@@ -1222,6 +1305,13 @@ function fiResizeIfrGpu(width,height) {
 
 function fiUseClassicFallback(engine, error, session = feedSessionId) {
   if (fiGpuEngine !== engine || (session && session !== feedSessionId)) return;
+  if (engine.backend === "webgpu") {
+    fiWebGpuFailure = String(error?.message || error || "WebGPU processing failed");
+    fiReleaseGpu(false);
+    fiSkipReason = "Preparing IFRNet on WebGL2 after a WebGPU error.";
+    fiWarmGpu();
+    return;
+  }
   fiNeuralFailure = String(error?.message || error || "Neural processing failed");
   fiReleaseGpu(false);
   fiSkipReason = "Optional neural backend unavailable; using Analytic Flow. " + fiNeuralFailure;
@@ -1229,6 +1319,10 @@ function fiUseClassicFallback(engine, error, session = feedSessionId) {
 }
 
 function fiReleaseGpu(clearNeuralFailure = true) {
+  if (typeof fiDirectActive === "boolean" && fiDirectActive) fiLeaveDirectCompositor();
+  fiBufferedEpoch++;
+  fiBufferedPairs.clear();
+  fiHasHistory = false;
   fiGpuGeneration++;
   fiGpuController?.abort();fiGpuController=null;fiGpuInitSize=null;
   fiGpuInit = null;
@@ -1242,7 +1336,7 @@ function fiReleaseGpu(clearNeuralFailure = true) {
   fiGpuState = "idle";
   fiGpuBusy = false;
   fiMethod = "skip";
-  if (clearNeuralFailure) fiNeuralFailure = "";
+  if (clearNeuralFailure) { fiNeuralFailure = ""; fiWebGpuFailure = ""; }
   if (engine) engine.destroy();
 }
 
@@ -1323,37 +1417,133 @@ function fiRequestAnalyticPair() {
 function fiRequestIfrPair() {
   const engine=fiGpuEngine,serial=fiPairSerial,video=currentVideo,
     session=typeof feedSessionId === "number" ? feedSessionId : 0;
+  const buffered=fiBufferedMode,epoch=fiBufferedEpoch,prev=fiPrevTexture,curr=fiCurrTexture;
+  const debug=["off","flow","mask","residual","off"][settings.fiDebug];
   const duration=lastVideoFrameDurationMs||1000/((metricReport.videoFps||30)*(video.playbackRate||1));
-  const estimate=Number.isFinite(engine.stats.ms)&&engine.stats.ms>0?engine.stats.ms:0;
-  const slot=FiQuality.neuralSlot(fiPairAnchorTime,duration,fiDisplayPeriod,fiDisplayReference||fiPairAnchorTime,
-    estimate?performance.now()+estimate+1:fiPairAnchorTime);
+  const modelSize=engine.modelSize;
+  const timingKey=[session,video.videoWidth,video.videoHeight,modelSize?.width,modelSize?.height,
+    settings.fiProfile,debug,buffered].join(":");
+  const timing=engine.presentationTiming?.key===timingKey?engine.presentationTiming:
+    (engine.presentationTiming={key:timingKey,samples:[],deadlineMisses:0});
+  const costs=timing.samples.slice().sort((a,b)=>a-b);
+  // A short even window stabilizes the one-frame path. Buffered presentation
+  // must follow the last measured cost: smoothing or latest-slot probes can
+  // move a ready result past its only source-valid refresh at high cadence.
+  const lastCost=Number.isFinite(engine.stats.ms)&&engine.stats.ms>0?engine.stats.ms:0;
+  const estimate=buffered?lastCost:(costs.length?costs[Math.floor(costs.length/2)]:0);
+  const lead=fiDisplayLeadMs,callbackDelay=fiDisplayCallbackDelayMs;
+  const anchor=fiPairAnchorTime+(buffered?duration:0);
+  const slot=FiQuality.neuralSlot(anchor,duration,fiDisplayPeriod,fiDisplayReference?fiDisplayReference+lead:fiPairAnchorTime,
+    estimate&&(buffered||timing.deadlineMisses<2)?performance.now()+lead+estimate-callbackDelay:anchor+duration*.85);
+  if(slot){
+    slot.leadMs=lead;
+    // Low-cadence rVFC delivery can shift the next rAF grid. Allow that first
+    // actual refresh to consume the prediction, still before the next anchor.
+    if(!buffered)slot.expires=Math.min(anchor+duration-1,slot.time+fiDisplayPeriod-.25);
+    // A refresh timestamp precedes execution of its rAF callback. Freeze the
+    // observed offset for this prediction, converting its display deadline to
+    // execution time without changing the inferred display phase.
+    slot.callbackDelayMs=callbackDelay;
+    slot.deadline=slot.expires-lead+callbackDelay;
+  }
   fiNeuralResult=fiNeuralTarget=null;
   if(!settings.fiBlockMatch){fiSkipReason="Motion estimation is disabled.";return false;}
   if(!fiHasPrev||fiPairDiscontinuous){fiSkipReason="Waiting for adjacent video frames after a source change or gap.";return false;}
   if(!slot){fiSkipReason=`No extra display slot (${(1000/duration).toFixed(1)} fps video; ${(1000/fiDisplayPeriod).toFixed(1)} Hz display).`;return false;}
   if(fiGpuBusy){fiSkipReason=engine.stats.ms>0?`IFRNet is processing a previous pair (${engine.stats.ms.toFixed(1)} ms last complete inference; ${duration.toFixed(1)} ms source interval).`:
     "IFRNet is finishing a bounded GPU slice; preserving source playback.";return false;}
-  if(performance.now()>=slot.expires){fiSkipReason="The source frame arrived after its neural display deadline.";return false;}
-  const valid=()=>fiGpuEngine===engine&&serial===fiPairSerial&&isCurrentFeedSession(video,session)&&settings.fiInfra&&settings.fiBlockMatch&&canRender();
+  if(performance.now()>=slot.deadline){fiSkipReason="The source frame arrived after its neural display deadline.";return false;}
+  const cacheValid=()=>fiGpuEngine===engine&&epoch===fiBufferedEpoch&&isCurrentFeedSession(video,session)&&settings.fiInfra&&settings.fiBlockMatch&&canRender();
+  const valid=()=>(serial===fiPairSerial||(buffered&&serial===fiPairSerial-1))&&cacheValid()&&
+    ["off","flow","mask","residual","off"][settings.fiDebug]===debug;
+  const pair=buffered?{serial,epoch,slot,prev,curr,width:textureWidth,height:textureHeight,ready:false}:null;
+  if(pair)fiBufferedPairs.set(serial,pair);
+  let submitted=false;
+  const onSubmitted=result=>{
+    if(submitted||!engine.compositor||!fiDirectActive||!result?.valid||!result.gpuTexture||
+       result.serial!==serial||Math.abs(result.phase-slot.phase)>.001||!valid()||performance.now()>slot.deadline)return false;
+    if(settings.fiSceneCut&&result.sceneCut)return false;
+    if(pair){
+      if(fiBufferedPairs.get(serial)!==pair)return false;
+      pair.gpuTexture=result.gpuTexture;pair.result=result;pair.ready=true;
+    }else{
+      fiNeuralResult=result;fiGpuReadySerial=serial;fiMethod="ifrnet";fiSkipReason="";
+    }
+    submitted=true;return true;
+  };
   fiNeuralTarget=slot;fiGpuBusy=true;fiMethod="pending";
   fiSkipReason="Computing a neural frame for the next display slot.";
-  engine.estimate(fiPrevTexture,fiCurrTexture,serial,slot.phase,{deadline:slot.expires,valid,quantumMs:Math.min(4,duration*.12)}).then(result=>{
-    if(fiGpuEngine!==engine||!isCurrentFeedSession(video, session)||!settings.fiInfra||!canRender())return;
+  const quantumMs=Math.min(4,duration*(engine.backend==="webgpu" ? .24 : .12));
+  const deadlineBudget=slot.deadline-performance.now();
+  engine.estimate(prev,curr,serial,slot.phase,{deadline:slot.deadline,valid,cacheValid,quantumMs,
+    debug,onSubmitted}).then(result=>{
+    if(!cacheValid())return;
     if(!result?.valid){
+      // A partial run is not a full cost measurement. Repeated deadline misses
+      // instead permit a bounded latest-slot probe, so a cost increase cannot
+      // starve the estimator of the completions needed to learn that increase.
+      if(!buffered&&engine.lastRun?.reason==='deadline') {
+        // A pair that already had less than its known cost available is not
+        // evidence of slower inference. Pushing it later can lose a ready frame
+        // to the next source capture without adding any usable refresh.
+        timing.deadlineMisses=deadlineBudget>=estimate?Math.min(2,timing.deadlineMisses+1):0;
+      }
       if(serial===fiPairSerial){fiMethod="skip";fiSkipReason=engine.lastRun?.reason==='deadline'?
         "Neural work stopped at its display deadline; preserving source playback.":"The neural pair was replaced before completion; preserving source playback.";}
       return;
     }
     fiGpuElapsedMs=result.elapsedMs||0;engine.stats.ms=fiGpuElapsedMs;engine.stats.completed++;
-    if(serial!==fiPairSerial||performance.now()>slot.expires){
+    if(Number.isFinite(fiGpuElapsedMs)&&fiGpuElapsedMs>0){
+      if(timing.deadlineMisses>=2)timing.samples.length=0;
+      timing.samples.push(fiGpuElapsedMs);
+      if(timing.samples.length>8)timing.samples.shift();
+      timing.deadlineMisses=0;
+    }
+    // The direct compositor already owns an ordered private GPU copy. Keep
+    // that same prediction instead of copying again after CPU notification.
+    if(submitted)return;
+    if(!valid()||performance.now()>slot.deadline){
       engine.stats.late++;
       if(serial===fiPairSerial){fiMethod="skip";fiSkipReason=`Neural result arrived after its display slot (${fiGpuElapsedMs.toFixed(1)} ms compute; ${duration.toFixed(1)} ms source interval).`;}
       return;
     }
     if(settings.fiSceneCut&&result.sceneCut){fiMethod="skip";fiSkipReason="Scene cut; keeping original anchors.";return;}
+    if(pair){
+      if(fiBufferedPairs.get(serial)!==pair)return;
+      if(engine.compositor && fiDirectActive){
+        pair.gpuTexture=engine.retainPrediction(serial%2);
+        if(!pair.gpuTexture)return;
+        pair.ready=true;pair.result=result;return;
+      }
+      const target=fiBufferedTextures[serial%2];
+      if(!target||!engine.render(prev,curr,target,pair.width,pair.height,["off","flow","mask","residual","off"][settings.fiDebug]))return;
+      pair.texture=target;pair.ready=true;pair.result=result;
+      return;
+    }
+    if(engine.compositor && fiDirectActive){result.gpuTexture=engine.retainPrediction(serial%2);if(!result.gpuTexture)return;}
     fiNeuralResult=result;fiGpuReadySerial=serial;fiMethod="ifrnet";fiSkipReason="";
-  }).catch(error=>fiUseClassicFallback(engine,error,session)).finally(()=>{if(fiGpuEngine===engine)fiGpuBusy=false;});return true;
+  }).catch(error=>fiUseClassicFallback(engine,error,session)).finally(()=>{
+    if(fiGpuEngine!==engine)return;
+    fiGpuBusy=false;
+    // A source callback may have arrived while the previous final fence was
+    // draining. Give that adjacent pair one chance to reuse its ready encoder.
+    if(fiPairSerial===serial+1&&engine.lastRun?.cachedEncoder&&cacheValid()&&fiRequestIfrPair()&&fiLatencyActive&&!buffered){
+      fiScheduleMidFrame(fiPairSerial,{expectedDisplayTime:fiPairAnchorTime});
+    }
+  });return true;
 }
+function fiObserveDisplayCallback(now) {
+  if (!Number.isFinite(now)) return;
+  const delay = performance.now() - now;
+  // Ignore suspended/background turns instead of budgeting inference against
+  // an exceptional stall. A bounded median follows the active browser clock.
+  if (!Number.isFinite(delay) || delay < 0 || delay > fiDisplayPeriod * 2) return;
+  fiDisplayCallbackDelays.push(delay);
+  if (fiDisplayCallbackDelays.length > 12) fiDisplayCallbackDelays.shift();
+  const sorted = fiDisplayCallbackDelays.slice().sort((a, b) => a - b);
+  fiDisplayCallbackDelayMs = sorted[Math.floor(sorted.length / 2)];
+}
+
 function fiMeasureDisplay() {
   if (fiDisplayRaf !== null || !settings.fiInfra || stopped) return;
   let previous = null;
@@ -1361,6 +1551,7 @@ function fiMeasureDisplay() {
   const sample = now => {
     fiDisplayRaf = null;
     if (!settings.fiInfra || document.hidden || stopped || !currentVideo || !canRender()) return;
+    fiObserveDisplayCallback(now);
     if (previous !== null && now - previous > 2 && now - previous < 80) intervals.push(now - previous);
     previous = now;
     fiDisplayReference = now;
@@ -1515,6 +1706,18 @@ function fiEnsureFrameTextures(w, h) {
   }
   fiTextureW = w;
   fiTextureH = h;
+}
+
+function fiEnsureBufferedTextures(w, h) {
+  if (!fiHistoryTexture) fiHistoryTexture = fiMakeTexture();
+  while (fiBufferedTextures.length < 2) fiBufferedTextures.push(fiMakeTexture());
+  if (fiBufferedW === w && fiBufferedH === h) return;
+  for (const tex of [fiHistoryTexture, ...fiBufferedTextures]) {
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  }
+  fiBufferedW = w;
+  fiBufferedH = h;
 }
 
 function fiLumaSampleSize(srcW, srcH, halfLuma) {
@@ -1694,7 +1897,18 @@ function fiComputeDecision() {
   return fiMethod;
 }
 
-function fiRenderMidToOut(phase) {
+function fiRenderMidToOut(phase, buffered = null, presentationTime) {
+  const slot = buffered?.slot || fiNeuralTarget;
+  const displayNow = Number.isFinite(presentationTime) ? presentationTime : performance.now() + (slot?.leadMs || 0);
+  if (buffered) {
+    if (!fiBufferedMode || buffered.epoch !== fiBufferedEpoch || buffered.serial !== fiPairSerial - 1 ||
+        fiBufferedPairs.get(buffered.serial) !== buffered || !buffered.ready ||
+        displayNow > buffered.slot.expires || Math.abs(phase - buffered.slot.phase) > .001 ||
+        !fiEnsureOut(buffered.width, buffered.height)) return false;
+    fiCopyTexture(buffered.texture, fiOutTexture, buffered.width, buffered.height);
+    fiPresentedAnchor = buffered.prev;
+    return true;
+  }
   if (fiMethod === "analytic") {
     if (!fiHasPrev || !fiHasCurr || fiGpuReadySerial!==fiPairSerial || !fiGpuEngine ||
         !fiEnsureOut(textureWidth,textureHeight)) return false;
@@ -1703,7 +1917,7 @@ function fiRenderMidToOut(phase) {
   if (fiMethod === "ifrnet") {
     if (!fiHasPrev || !fiHasCurr || fiGpuReadySerial!==fiPairSerial || !fiGpuEngine ||
         !fiEnsureOut(textureWidth,textureHeight)) return false;
-    if(!fiNeuralTarget || !fiNeuralResult || performance.now()>fiNeuralTarget.expires || Math.abs(phase-fiNeuralTarget.phase)>.001)return false;
+    if(!fiNeuralTarget || !fiNeuralResult || displayNow>fiNeuralTarget.expires || Math.abs(phase-fiNeuralTarget.phase)>.001)return false;
     return fiGpuEngine.render(fiPrevTexture,fiCurrTexture,fiOutTexture,textureWidth,textureHeight,
       ["off","flow","mask","residual","off"][settings.fiDebug]);
   }
@@ -1711,7 +1925,7 @@ function fiRenderMidToOut(phase) {
   if (fiMethod === "neural") {
     const result = fiNeuralResult;
     if (!result || result.serial !== fiPairSerial || fiGpuReadySerial !== fiPairSerial ||
-        !fiNeuralTarget || performance.now() > fiNeuralTarget.expires ||
+        !fiNeuralTarget || displayNow > fiNeuralTarget.expires ||
         !fiEnsureOut(result.width, result.height)) return false;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.activeTexture(gl.TEXTURE0);
@@ -1764,29 +1978,87 @@ function fiRenderMidToOut(phase) {
   return true;
 }
 
-function fiAfterVideoUpload(video) {
+function fiAfterVideoUpload(video, direct = false) {
   if (!settings.fiInfra || !gl ||
       (scrolling && settings.interaction !== "quality")) return false;
+  if (settings.fiEngine === "ifrnet") {
+    fiWarmGpu();
+    if (!fiGpuEngine || fiGpuEngine.lost || fiGpuState !== "ready") {
+      // A preparing backend cannot consume this history. Keep presenting the
+      // live spatial frame instead of allocating and copying unused FI textures.
+      if (fiHasPrev || fiHasCurr || fiHasHistory || fiLatencyActive) resetFiPairState();
+      fiBufferedMode = false;
+      return fiRequestGpuPair();
+    }
+  }
   const w = video.videoWidth;
   const h = video.videoHeight;
   if (!w || !h) return false;
-  fiEnsureFrameTextures(w, h);
+  if (direct) {
+    if (fiTextureW !== w || fiTextureH !== h) resetFiPairState();
+    fiPrevTexture ||= fiMakeTexture(); fiCurrTexture ||= fiMakeTexture();
+    fiHistoryTexture ||= fiMakeTexture();
+    fiTextureW = w; fiTextureH = h;
+  } else fiEnsureFrameTextures(w, h);
+
+  const duration = lastVideoFrameDurationMs || 1000 / ((metricReport.videoFps || 30) * (video.playbackRate || 1));
+  // Include 40–45 fps playback (for example 30 fps at 1.5x). A one-frame
+  // inference window loses alternating midpoints at these rates. Keep the
+  // wider exit threshold to avoid rebuilding history on small timing changes.
+  const buffered = settings.fiBlockMatch === true && fiGpuEngine?.kind === "ifrnet" &&
+    duration < (fiBufferedMode ? 30 : 26) && duration > fiDisplayPeriod * 1.45;
+  if (buffered !== fiBufferedMode) {
+    resetFiPairState();
+    fiBufferedMode = buffered;
+  }
+  if (buffered) {
+    if (!direct) fiEnsureBufferedTextures(w, h);
+    cancelFiMid();
+    if (fiPairDiscontinuous) resetFiPairState();
+  }
 
   if (fiHasCurr) {
     // previous curr becomes prev
-    const tmp = fiPrevTexture;
+    const tmp = buffered && fiHasPrev ? fiHistoryTexture : fiPrevTexture;
+    if (buffered && fiHasPrev) { fiHistoryTexture = fiPrevTexture; fiHasHistory = true; }
     fiPrevTexture = fiCurrTexture;
     fiCurrTexture = tmp;
     fiHasPrev = true;
   }
   // copy current video texture into fiCurrTexture
-  fiCopyTexture(texture, fiCurrTexture, w, h);
+  if (!direct) fiCopyTexture(texture, fiCurrTexture, w, h);
   fiHasCurr = true;
   fiPairSerial++;
+  if (fiGpuEngine?.captureFrame && fiGpuState === "ready") {
+    try { fiGpuEngine.captureFrame(video, fiPairSerial); }
+    catch (error) { fiUseClassicFallback(fiGpuEngine, error); return false; }
+  }
+  for (const serial of fiBufferedPairs.keys()) if (serial < fiPairSerial - 1) fiBufferedPairs.delete(serial);
   // Legacy LK and Personal Framegen's scene checks consume CPU luma. IFRNet
   // and an unready neural backend must not read video pixels back every frame.
   if (settings.fiEngine === "classic" || ["classic","neural"].includes(fiGpuEngine?.kind)) fiUpdateLumaSample(video);
   return fiRequestGpuPair();
+}
+
+function fiScheduleBufferedMidFrame() {
+  cancelFiMid();
+  if (!fiLatencyActive || !fiHasHistory || !canRender()) return;
+  const serial = fiPairSerial, epoch = fiBufferedEpoch, pair = fiBufferedPairs.get(serial - 1);
+  const video = currentVideo, session = feedSessionId;
+  if (!pair) return;
+  const present = now => {
+    fiMidRaf = null;
+    if (!settings.fiInfra || !fiBufferedMode || !canRender() || !fiLatencyActive ||
+        epoch !== fiBufferedEpoch || serial !== fiPairSerial || !isCurrentFeedSession(video, session)) return;
+    const displayNow = now + (pair.slot.leadMs || 0);
+    if (displayNow > pair.slot.expires) { fiSkipReason = "Buffered neural frame missed its display slot."; return; }
+    if (displayNow < pair.slot.time - .5 || !pair.ready) { fiMidRaf = requestAnimationFrame(present); return; }
+    fiMethod = "ifrnet";
+    fiSkipReason = "";
+    try { draw({ fiMid: true, fiPhase: pair.slot.phase, fiBuffered: pair, fiPresentationTime: displayNow }); }
+    catch (error) { fiUseClassicFallback(fiGpuEngine, error, session); }
+  };
+  fiMidRaf = requestAnimationFrame(present);
 }
 
 function fiScheduleMidFrame(pairSerial, metadata) {
@@ -1810,12 +2082,13 @@ function fiScheduleMidFrame(pairSerial, metadata) {
     fiDisplayReference = now;
     if (["neural","ifrnet"].includes(fiGpuEngine?.kind)) {
       const slot = fiNeuralTarget;
-      if (!slot || now > slot.expires) { fiSkipReason = "Neural presentation slot expired; keeping the anchor."; return; }
-      if (now < slot.time - .5 || fiMethod === "pending") { fiMidRaf = requestAnimationFrame(present); return; }
+      const displayNow = now + (slot?.leadMs || 0);
+      if (!slot || displayNow > slot.expires) { fiSkipReason = "Neural presentation slot expired; keeping the anchor."; return; }
+      if (displayNow < slot.time - .5 || fiMethod === "pending") { fiMidRaf = requestAnimationFrame(present); return; }
       if (!["neural","ifrnet"].includes(fiMethod) || fiGpuReadySerial !== pairSerial || !fiNeuralResult) return;
       // Display precisely the phase that was inferred; do not relabel a cached
       // midpoint as a later phase to inflate the output frame rate.
-      try { draw({ fiMid: true, fiPhase: slot.phase }); }
+      try { draw({ fiMid: true, fiPhase: slot.phase, fiPresentationTime: displayNow }); }
       catch (error) { fiUseClassicFallback(fiGpuEngine, error); }
       return;
     }
@@ -1894,9 +2167,9 @@ function createOverlay() {
   timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
   timerExtChecked = true;
   program = linkProgram(VERT, FRAG);
-  easuProgram = linkProgram(VERT, EASU_FRAG);
+  easuProgram = null;
   rcasProgram = linkProgram(VERT_PLAIN, FRAG);
-  if (!program || !easuProgram || !rcasProgram) {
+  if (!program || !rcasProgram) {
     status = "no-webgl";
     return false;
   }
@@ -1904,15 +2177,13 @@ function createOverlay() {
   uTexelLoc = gl.getUniformLocation(program, "u_texel");
   uStrengthLoc = gl.getUniformLocation(program, "u_strength");
   uCompareLoc = gl.getUniformLocation(program, "u_compare");
-  easuTexLoc = gl.getUniformLocation(easuProgram, "u_tex");
+  easuTexLoc = null;
   rcasTexLoc = gl.getUniformLocation(rcasProgram, "u_tex");
   rcasTexelLoc = gl.getUniformLocation(rcasProgram, "u_texel");
   rcasStrengthLoc = gl.getUniformLocation(rcasProgram, "u_strength");
   rcasCompareLoc = gl.getUniformLocation(rcasProgram, "u_compare");
   gl.useProgram(program);
   gl.uniform1i(uTexLoc, 0);
-  gl.useProgram(easuProgram);
-  gl.uniform1i(easuTexLoc, 0);
   gl.useProgram(rcasProgram);
   gl.uniform1i(rcasTexLoc, 0);
 
@@ -1927,6 +2198,18 @@ function createOverlay() {
 
   applyCanvasOutline(false);
   warmFiPrograms();
+  return true;
+}
+
+function ensureEasuProgram() {
+  if (easuProgram) return true;
+  // RAVU, native playback and RCAS without enlargement never use EASU.
+  // Avoid compiling its large shader while opening those pipelines.
+  easuProgram = linkProgram(VERT, EASU_FRAG);
+  if (!easuProgram) { status = "no-webgl"; return false; }
+  easuTexLoc = gl.getUniformLocation(easuProgram, "u_tex");
+  gl.useProgram(easuProgram);
+  gl.uniform1i(easuTexLoc, 0);
   return true;
 }
 
@@ -1964,6 +2247,35 @@ function linkProgram(vertexSource, fragmentSource) {
   return linked;
 }
 
+async function linkProgramCooperatively(vertexSource, fragmentSource) {
+  const context = gl, parallel = context.getExtension("KHR_parallel_shader_compile");
+  const vertex = context.createShader(context.VERTEX_SHADER), fragment = context.createShader(context.FRAGMENT_SHADER);
+  const linked = context.createProgram();
+  try {
+    if (!vertex || !fragment || !linked) throw new Error("Spatial shader allocation failed.");
+    context.shaderSource(vertex, vertexSource); context.compileShader(vertex);
+    context.shaderSource(fragment, fragmentSource); context.compileShader(fragment);
+    context.attachShader(linked, vertex); context.attachShader(linked, fragment); context.linkProgram(linked);
+    const start = performance.now();
+    while (parallel && !context.getProgramParameter(linked, parallel.COMPLETION_STATUS_KHR)) {
+      if (context !== gl || context.isContextLost()) throw new Error("Spatial shader context changed.");
+      if (performance.now() - start > 30000) throw new Error("Spatial shader compilation timed out.");
+      await new Promise(resolve => setTimeout(resolve, 8));
+    }
+    if (context !== gl || context.isContextLost()) throw new Error("Spatial shader context changed.");
+    if (!context.getProgramParameter(linked, context.LINK_STATUS)) {
+      throw new Error(context.getProgramInfoLog(linked) || "Spatial shader linking failed.");
+    }
+    return linked;
+  } catch (error) {
+    if (linked) context.deleteProgram(linked);
+    throw error;
+  } finally {
+    if (vertex) context.deleteShader(vertex);
+    if (fragment) context.deleteShader(fragment);
+  }
+}
+
 function extractRavuShader(source, name) {
   const marker = `${name}: String.raw\``;
   const start = source.indexOf(marker);
@@ -1975,29 +2287,61 @@ function extractRavuShader(source, name) {
 }
 
 function loadRavuShaders() {
-  if (ravuStepProgram && ravuComposeProgram) return Promise.resolve(true);
+  if (ravuClassifyProgram && ravuStepProgram && ravuComposeProgram) return Promise.resolve(true);
   if (ravuShadersPromise) return ravuShadersPromise;
+  const context = gl;
   ravuShadersPromise = fetch(ext.runtime.getURL("third_party/ravu-lite/ravu-lite-webgl2.js"))
     .then((response) => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response.text();
     })
-    .then((source) => {
-      ravuStepProgram = linkProgram(VERT, extractRavuShader(source, "step1"));
-      ravuComposeProgram = linkProgram(VERT_PLAIN, extractRavuShader(source, "compose"));
-      if (!ravuStepProgram || !ravuComposeProgram) {
+    .then(async (source) => {
+      if (context !== gl || context.isContextLost()) throw new Error("Spatial shader context changed.");
+      const step = extractRavuShader(source, "step1"), compose = extractRavuShader(source, "compose"),
+        classify = extractRavuShader(source, "classify");
+      const stages = [[VERT_PLAIN, classify], [VERT, step], [VERT_PLAIN, compose]];
+      let programs;
+      if (context.getExtension("KHR_parallel_shader_compile")) {
+        programs = await Promise.allSettled(stages.map(([vertex, fragment]) => linkProgramCooperatively(vertex, fragment)));
+      } else {
+        // Drivers without parallel compilation must finish smaller programs
+        // separately, with a presentation opportunity between them.
+        programs = [];
+        for (const [vertex, fragment] of stages) {
+          // Also separate the first stage from context/RCAS initialization.
+          await new Promise(resolve => setTimeout(resolve, 16));
+          try {
+            if (context !== gl || context.isContextLost()) throw new Error("Spatial shader context changed.");
+            programs.push({status:"fulfilled", value:await linkProgramCooperatively(vertex, fragment)});
+          }
+          catch (reason) { programs.push({status:"rejected", reason}); break; }
+        }
+      }
+      const failed = programs.find(result => result.status === "rejected");
+      if (failed || context !== gl || context.isContextLost()) {
+        for (const result of programs) if (result.status === "fulfilled") context.deleteProgram(result.value);
+        throw failed?.reason || new Error("Spatial shader context changed.");
+      }
+      [ravuClassifyProgram, ravuStepProgram, ravuComposeProgram] = programs.map(result => result.value);
+      if (!ravuClassifyProgram || !ravuStepProgram || !ravuComposeProgram) {
         throw new Error(lastError || "RAVU-lite shader compilation failed");
       }
       ravuSourceLoc = gl.getUniformLocation(ravuStepProgram, "u_source");
       ravuLutLoc = gl.getUniformLocation(ravuStepProgram, "u_lut");
+      ravuClassificationLoc = gl.getUniformLocation(ravuStepProgram, "u_classification");
+      ravuClassifySourceLoc = gl.getUniformLocation(ravuClassifyProgram, "u_source");
       ravuComposeSourceLoc = gl.getUniformLocation(ravuComposeProgram, "u_source");
       ravuPackedLoc = gl.getUniformLocation(ravuComposeProgram, "u_packed");
       ravuSourceSizeLoc = gl.getUniformLocation(ravuComposeProgram, "u_source_size");
       ravuOutputTexelLoc = gl.getUniformLocation(ravuComposeProgram, "u_output_texel");
       ravuCompareLoc = gl.getUniformLocation(ravuComposeProgram, "u_compare");
+      gl.useProgram(ravuClassifyProgram);
+      gl.uniform1i(ravuClassifySourceLoc, 0);
+      gl.uniform1i(gl.getUniformLocation(ravuClassifyProgram, "u_gradient_count"), 9);
       gl.useProgram(ravuStepProgram);
       gl.uniform1i(ravuSourceLoc, 0);
       gl.uniform1i(ravuLutLoc, 1);
+      gl.uniform1i(ravuClassificationLoc, 2);
       gl.useProgram(ravuComposeProgram);
       gl.uniform1i(ravuComposeSourceLoc, 0);
       gl.uniform1i(ravuPackedLoc, 1);
@@ -2026,6 +2370,7 @@ function loadRavuLut() {
       if (buffer.byteLength !== 59904) {
         throw new Error(`LUT has ${buffer.byteLength} bytes; expected 59904`);
       }
+      ravuLutData = new Float32Array(buffer);
       ravuLutTexture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, ravuLutTexture);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -2034,7 +2379,7 @@ function loadRavuLut() {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texImage2D(
         gl.TEXTURE_2D, 0, gl.RGBA16F, 13, 288, 0,
-        gl.RGBA, gl.FLOAT, new Float32Array(buffer),
+        gl.RGBA, gl.FLOAT, ravuLutData,
       );
       ravuLutReady = true;
       ravuLutError = "";
@@ -2073,11 +2418,15 @@ function trimSpatialTextures() {
     counts.set(entry.role, counts.get(entry.role) - 1);
     spatialTextures.delete(key);
   }
-  // If the three active targets alone exceed the budget, retain that minimum
+  // If the active targets alone exceed the budget, retain that minimum
   // working set; all optional cold entries have already been evicted.
 }
 
 function selectSpatialTargets(ravu, output) {
+  if (!ravu) {
+    spatialActive.delete("ravuClassify");
+    ravuClassifyTexture = ravuClassifyFramebuffer = null;
+  }
   if (!ravu && spatialActive.delete("ravu")) {
     ravuWidth = ravuHeight = 0; ravuPackedTexture = ravuFramebuffer = null;
   }
@@ -2102,7 +2451,7 @@ function acquireSpatialTexture(role, width, height, video = null) {
       gl.bindTexture(gl.TEXTURE_2D, entry.texture);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      const filter = role === "ravu" ? gl.NEAREST : gl.LINEAR;
+      const filter = role === "ravu" || role === "ravuClassify" ? gl.NEAREST : gl.LINEAR;
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
       if (video) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
@@ -2150,11 +2499,18 @@ function ensureRavuIntermediate() {
     ravuFloatTarget = Boolean(gl.getExtension("EXT_color_buffer_float")); ravuFloatChecked = true;
   }
   try {
+    const classify = acquireSpatialTexture("ravuClassify", width, height);
     const entry = acquireSpatialTexture("ravu", width, height);
+    ravuClassifyTexture = classify.texture; ravuClassifyFramebuffer = classify.framebuffer;
     ravuPackedTexture = entry.texture; ravuFramebuffer = entry.framebuffer;
     ravuWidth = width; ravuHeight = height;
     return true;
   } catch (error) {
+    // The first acquisition may have evicted the prior classification target.
+    // Never let a failed second acquisition leave the old size marked ready.
+    ravuWidth = ravuHeight = 0;
+    ravuClassifyTexture = ravuClassifyFramebuffer = null;
+    ravuPackedTexture = ravuFramebuffer = null;
     status = "error"; lastError = String(error.message || error); return false;
   }
 }
@@ -2201,6 +2557,7 @@ function activateRenderer(captureFrame = false) {
   if (!canvas && !createOverlay()) return false;
   attachCanvasTo(currentVideo);
   attachActivePageListeners();
+  observeVideoLayout();
   layoutDirty = true;
   updateCanvasVisibility();
   draw({ newVideoFrame: captureFrame });
@@ -2208,21 +2565,116 @@ function activateRenderer(captureFrame = false) {
   return true;
 }
 
+function videoObjectPosition(position, spaceX, spaceY) {
+  const tokens = String(position || "50% 50%").match(/calc\([^)]*\)|[^\s]+/g) || [];
+  const offset = (value, space) => {
+    if (value === "center") return space / 2;
+    if (value === "left" || value === "top") return 0;
+    if (value === "right" || value === "bottom") return space;
+    const expression = String(value).replace(/^calc\((.*)\)$/, "$1").replace(/\s+/g, "");
+    const terms = expression.match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:%|px)?/g);
+    if (!terms || terms.join("") !== expression) return space / 2;
+    return terms.reduce((sum, term) => sum + parseFloat(term) * (term.endsWith("%") ? space / 100 : 1), 0);
+  };
+  if (tokens.length <= 2) {
+    let x = tokens[0] || "center", y = tokens[1] || "center";
+    if (x === "top" || x === "bottom" || y === "left" || y === "right") [x, y] = [y, x];
+    return [offset(x, spaceX), offset(y, spaceY)];
+  }
+  let x = spaceX / 2, y = spaceY / 2;
+  for (let i = 0; i < tokens.length; i++) {
+    const edge = tokens[i];
+    if (edge === "center") continue;
+    const horizontal = edge === "left" || edge === "right";
+    if (!horizontal && edge !== "top" && edge !== "bottom") continue;
+    const space = horizontal ? spaceX : spaceY;
+    const next = tokens[i + 1];
+    const distance = next && !/^(left|right|top|bottom|center)$/.test(next) ? offset(tokens[++i], space) : 0;
+    const value = edge === "right" || edge === "bottom" ? space - distance : distance;
+    if (horizontal) x = value; else y = value;
+  }
+  return [x, y];
+}
+
+function videoObjectRect(width, height, naturalWidth, naturalHeight, fit, position) {
+  let w = width, h = height;
+  if (naturalWidth > 0 && naturalHeight > 0 && fit !== "fill") {
+    let scale = fit === "cover" ? Math.max(width / naturalWidth, height / naturalHeight) :
+      fit === "none" ? 1 : Math.min(width / naturalWidth, height / naturalHeight);
+    if (fit === "scale-down") scale = Math.min(1, scale);
+    w = naturalWidth * scale; h = naturalHeight * scale;
+  }
+  const [x, y] = videoObjectPosition(position, width - w, height - h);
+  return { x, y, width: w, height: h };
+}
+
+function videoOverlayGeometry(video, overlay) {
+  const style = getComputedStyle(video), rect = video.getBoundingClientRect();
+  const px = value => parseFloat(value) || 0;
+  const borderX = px(style.borderLeftWidth) + px(style.borderRightWidth);
+  const borderY = px(style.borderTopWidth) + px(style.borderBottomWidth);
+  const paddingX = px(style.paddingLeft) + px(style.paddingRight);
+  const paddingY = px(style.paddingTop) + px(style.paddingBottom);
+  const borderWidth = px(style.width) + (style.boxSizing === "border-box" ? 0 : borderX + paddingX) || video.offsetWidth;
+  const borderHeight = px(style.height) + (style.boxSizing === "border-box" ? 0 : borderY + paddingY) || video.offsetHeight;
+  const width = Math.max(0, borderWidth - borderX - paddingX), height = Math.max(0, borderHeight - borderY - paddingY);
+  if (!(width > 0 && height > 0 && rect.width > 0 && rect.height > 0)) return null;
+  const videoScaleX = rect.width / borderWidth, videoScaleY = rect.height / borderHeight;
+  const image = videoObjectRect(width, height, video.videoWidth, video.videoHeight, style.objectFit || "fill", style.objectPosition);
+  const screenLeft = rect.left + (px(style.borderLeftWidth) + px(style.paddingLeft) + image.x) * videoScaleX;
+  const screenTop = rect.top + (px(style.borderTopWidth) + px(style.paddingTop) + image.y) * videoScaleY;
+  let containing = overlay.offsetParent;
+  if (!containing && overlay.style?.display === "none") {
+    // display:none removes offsetParent, including during scroll/buffering.
+    // Measure without painting, then restore the current visibility policy.
+    const display = overlay.style.display, visibility = overlay.style.visibility;
+    try {
+      overlay.style.visibility = "hidden";
+      overlay.style.display = "block";
+      containing = overlay.offsetParent;
+    } finally {
+      overlay.style.display = display;
+      overlay.style.visibility = visibility;
+    }
+  }
+  let originX = -window.scrollX, originY = -window.scrollY, scaleX = 1, scaleY = 1;
+  if (containing) {
+    const parentStyle = getComputedStyle(containing);
+    const initialBlock = containing === document.body && parentStyle.position === "static" &&
+      parentStyle.transform === "none" && parentStyle.filter === "none" && parentStyle.perspective === "none" &&
+      !/(layout|paint|strict|content)/.test(parentStyle.contain) && !/transform|filter|perspective/.test(parentStyle.willChange);
+    if (!initialBlock) {
+      const parentRect = containing.getBoundingClientRect();
+      scaleX = containing.offsetWidth > 0 ? parentRect.width / containing.offsetWidth : 1;
+      scaleY = containing.offsetHeight > 0 ? parentRect.height / containing.offsetHeight : 1;
+      if (!(scaleX > 0 && scaleY > 0)) return null;
+      originX = parentRect.left + (containing.clientLeft - containing.scrollLeft) * scaleX;
+      originY = parentRect.top + (containing.clientTop - containing.scrollTop) * scaleY;
+    }
+  }
+  const ratioX = videoScaleX / scaleX, ratioY = videoScaleY / scaleY;
+  return {
+    left: (screenLeft - originX) / scaleX, top: (screenTop - originY) / scaleY,
+    width: image.width * ratioX, height: image.height * ratioY,
+    screenWidth: image.width * videoScaleX, screenHeight: image.height * videoScaleY,
+    clip: `inset(${Math.max(0, -image.y) * ratioY}px ${Math.max(0, image.x + image.width - width) * ratioX}px ${Math.max(0, image.y + image.height - height) * ratioY}px ${Math.max(0, -image.x) * ratioX}px)`,
+  };
+}
+
 function syncLayout() {
   if (stopped || !currentVideo || !canvas || !canvas.parentNode) return;
   if (!layoutDirty) return;
   const parent = currentVideo.parentElement;
   if (!parent) return;
-  const vRect = currentVideo.getBoundingClientRect();
-  const pRect = parent.getBoundingClientRect();
-  // Coordinates relative to the positioned container (usually position:relative).
-  const left = vRect.left - pRect.left;
-  const top = vRect.top - pRect.top;
+  if (canvas.parentNode !== parent) attachCanvasTo(currentVideo);
+  const image = videoOverlayGeometry(currentVideo, canvas);
+  if (!image) return;
+  const { left, top } = image;
 
   // ponytail: cap at DPR 2 — resolving 4K into a 900px canvas is wasteful.
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  targetWidth = Math.max(1, Math.round(vRect.width * dpr));
-  targetHeight = Math.max(1, Math.round(vRect.height * dpr));
+  targetWidth = Math.max(1, Math.round(image.screenWidth * dpr));
+  targetHeight = Math.max(1, Math.round(image.screenHeight * dpr));
   if (settings.quality === "auto") {
     const cap = autoScaleCap(
       targetWidth, targetHeight, metricReport.videoFps || 60,
@@ -2240,17 +2692,112 @@ function syncLayout() {
   if (canvas.height !== h) canvas.height = h;
   const cssLeft = left + "px";
   const cssTop = top + "px";
-  const cssWidth = vRect.width + "px";
-  const cssHeight = vRect.height + "px";
+  const cssWidth = image.width + "px";
+  const cssHeight = image.height + "px";
   if (canvas.style.left !== cssLeft) canvas.style.left = cssLeft;
   if (canvas.style.top !== cssTop) canvas.style.top = cssTop;
   if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
   if (canvas.style.height !== cssHeight) canvas.style.height = cssHeight;
+  if (canvas.style.clipPath !== image.clip) canvas.style.clipPath = image.clip;
   if (settings.compare) {
     ensureCompareLabels();
-    positionCompareLabels(left, top, vRect.width);
+    positionCompareLabels(left, top, image.width);
   }
   layoutDirty = false;
+  fiGpuEngine?.compositor?.align();
+}
+
+function fiLeaveDirectCompositor() {
+  fiGpuEngine?.compositor?.setVisible(false);
+  if (fiGpuEngine) fiGpuEngine.directPresentation = false;
+  if (!fiDirectActive) return;
+  fiDirectActive = false; fiDirectLastPrediction = null;
+  // Direct capture rotates identity tokens without allocating GL pixels.
+  // Recreate their storage before the legacy renderer next writes to them.
+  fiTextureW = fiTextureH = fiBufferedW = fiBufferedH = 0;
+  resetFiPairState();
+}
+
+function fiDirectConfig() {
+  if (!settings.fiInfra || !fiGpuEngine?.compositor?.ready || fiGpuEngine.destroyed || fiGpuEngine.lost) return null;
+  const w = currentVideo.videoWidth, h = currentVideo.videoHeight;
+  if (!fiGpuEngine.compositor.canRenderDimensions?.(w, h, canvas.width, canvas.height)) return null;
+  const ravu = settings.mode === "ravu" && shouldUseRavu(w, h, canvas.width, canvas.height, settings.quality);
+  // FSR enlargement continues through its existing EASU implementation.
+  if (!ravu && settings.mode !== "native" && (canvas.width > w || canvas.height > h)) return null;
+  return {algorithm:ravu ? "ravu" : settings.mode === "native" ? "native" : "rcas",
+    strength:settings.mode === "native" ? 0 : adjustedRcasStrength(settings.strength / 100, Math.max(canvas.width / w, canvas.height / h)),
+    compare:settings.compare};
+}
+
+function fiDrawDirect(options, drawKind, cpuStart) {
+  const config = fiDirectConfig();
+  if (!config) { fiLeaveDirectCompositor(); return false; }
+  const engine = fiGpuEngine;
+  if (!fiDirectActive) { resetFiPairState(); fiDirectActive = true; fiDirectLastPrediction = null; }
+  engine.directPresentation = true;
+  let presentation = "current", shown = false;
+  try {
+    if (drawKind === "capture") {
+      textureWidth = currentVideo.videoWidth; textureHeight = currentVideo.videoHeight;
+      const expected = Number(options.videoMetadata?.expectedDisplayTime);
+      const frameTime = Number.isFinite(options.frameTime) ? options.frameTime : performance.now();
+      fiPairAnchorTime = Number.isFinite(expected) ? expected : frameTime + fiDisplayLeadMs;
+      const pending = !engine.resizing && fiAfterVideoUpload(currentVideo, true);
+      let delayed = !engine.resizing && fiHasPrev && fiHasCurr && !currentVideo.paused && !currentVideo.ended && (fiLatencyActive || pending || fiBufferedMode);
+      fiLatencyActive = delayed;
+      const offset = delayed ? fiBufferedMode && fiHasHistory ? 2 : 1 : 0;
+      if (engine.hasCapturedFrame(fiPairSerial - offset)) shown = engine.presentFrame(fiPairSerial - offset, config);
+      else {
+        // A missing historical capture cannot be replaced by a newer image
+        // under its old serial: that would move backwards on the next frame.
+        if (!engine.resizing) resetFiPairState();
+        delayed = false; fiLatencyActive = false;
+        shown = engine.presentFrame(-1, config, currentVideo);
+      }
+      presentation = delayed ? "anchor" : "current";
+      fiPresentedAnchor = offset === 2 ? fiHistoryTexture : offset === 1 ? fiPrevTexture : fiCurrTexture;
+      fiDirectLastPrediction = null;
+      if (delayed) {
+        if (fiBufferedMode) fiScheduleBufferedMidFrame();
+        else if (fiMethod === "pending" || fiShouldPresentMid()) fiScheduleMidFrame(fiPairSerial, options.videoMetadata);
+      }
+    } else if (drawKind === "mid") {
+      const pair = options.fiBuffered;
+      const result = pair || fiNeuralResult, target = pair?.slot || fiNeuralTarget;
+      const displayNow = Number.isFinite(options.fiPresentationTime) ? options.fiPresentationTime : performance.now() + (target?.leadMs || 0);
+      if (!result?.gpuTexture || !target || displayNow > target.expires ||
+          Math.abs((options.fiPhase ?? .5) - target.phase) > .001) return true;
+      if (pair ? !fiBufferedMode || pair.epoch !== fiBufferedEpoch || pair.serial !== fiPairSerial - 1 ||
+          fiBufferedPairs.get(pair.serial) !== pair || !pair.ready : fiGpuReadySerial !== fiPairSerial || result.serial !== fiPairSerial) return true;
+      const anchor = (pair?.serial ?? fiPairSerial) - 1;
+      shown = engine.presentPrediction(result.gpuTexture, config, anchor, currentVideo);
+      presentation = "mid";
+      fiDirectLastPrediction = {texture:result.gpuTexture,serial:fiPairSerial,epoch:fiBufferedEpoch,anchor};
+    } else {
+      const mid = fiDirectLastPrediction;
+      if (fiLastPresentation === "mid" && mid?.serial === fiPairSerial && mid.epoch === fiBufferedEpoch) {
+        shown = engine.presentPrediction(mid.texture, config, mid.anchor, currentVideo); presentation = "mid";
+      } else {
+        const offset = fiLatencyActive && !options.nativeCurrent ? fiBufferedMode && fiHasHistory ? 2 : 1 : 0;
+        shown = engine.hasCapturedFrame(fiPairSerial - offset) ? engine.presentFrame(fiPairSerial - offset, config) :
+          !offset ? engine.presentFrame(-1, config, currentVideo) : false;
+        presentation = offset ? "anchor" : "current";
+      }
+    }
+  } catch (error) {
+    fiLeaveDirectCompositor(); fiUseClassicFallback(engine, error); return true;
+  }
+  if (!shown) return true;
+  activePipeline = (config.algorithm === "ravu" ? config.strength > 0 ? "RAVU-lite AR → RCAS" : "RAVU-lite AR" : config.algorithm === "native" ? "Native" : "RCAS") +
+    (presentation === "mid" ? " · FI ifrnet" : presentation === "anchor" ? " · FI anchor" : "");
+  fiLastPresentation = presentation;
+  const cpuMs = cpuStart ? performance.now() - cpuStart : null;
+  if (drawKind !== "redraw") recordDraw(cpuMs, drawKind === "mid");
+  if (drawKind === "capture" && cpuMs != null) fiLastRealCpuMs = cpuMs;
+  if (drawKind === "mid" && cpuMs != null) fiMidCpuMs = fiMidCpuMs * .75 + cpuMs * .25;
+  status = "ok"; lastError = ""; updateCanvasDataset(activePipeline, ""); updateCanvasVisibility();
+  return true;
 }
 
 function draw(options = {}) {
@@ -2275,11 +2822,12 @@ function draw(options = {}) {
   if (drawKind === "redraw" && (!textureWidth || !textureHeight)) return;
   if (drawKind === "redraw" &&
       (textureWidth !== currentVideo.videoWidth || textureHeight !== currentVideo.videoHeight)) return;
+  if (fiDrawDirect(options, drawKind, cpuStart)) return;
   if (settings.mode === "ravu" &&
       shouldUseRavu(
         currentVideo.videoWidth, currentVideo.videoHeight, canvas.width, canvas.height,
         settings.quality,
-      ) && (!ravuLutReady || !ravuStepProgram || !ravuComposeProgram)) {
+      ) && (!ravuLutReady || !ravuClassifyProgram || !ravuStepProgram || !ravuComposeProgram)) {
     const ravuError = ravuShaderError || ravuLutError;
     activePipeline = ravuError ? "RAVU-lite unavailable" : "RAVU-lite loading";
     updateCanvasDataset(activePipeline, ravuError);
@@ -2343,7 +2891,7 @@ function draw(options = {}) {
   let srcH = drawKind === "capture" ? currentVideo.videoHeight : textureHeight;
 
   if (isFiMid) {
-    if (!fiRenderMidToOut(Number.isFinite(options.fiPhase) ? options.fiPhase : 0.5)) {
+    if (!fiRenderMidToOut(Number.isFinite(options.fiPhase) ? options.fiPhase : 0.5, options.fiBuffered, options.fiPresentationTime)) {
       if (gpuQuery) {
         gl.endQuery(timerExt.TIME_ELAPSED_EXT);
         gl.deleteQuery(gpuQuery);
@@ -2386,22 +2934,28 @@ function draw(options = {}) {
       let gpuPairPending = false;
       try {
         const expected = Number(options.videoMetadata?.expectedDisplayTime);
-        fiPairAnchorTime = Number.isFinite(expected) ? expected : performance.now();
+        const frameTime = Number.isFinite(options.frameTime) ? options.frameTime : performance.now();
+        const projectedFrame = fiGpuEngine?.kind === "ifrnet" ? frameTime + fiDisplayLeadMs : performance.now();
+        fiPairAnchorTime = Number.isFinite(expected) ? expected : projectedFrame;
         gpuPairPending = fiAfterVideoUpload(currentVideo);
       } catch (err) {
         log("FI pair update failed:", err);
         fiMethod = "skip";
       }
       const useLatency = fiHasPrev && fiHasCurr && !currentVideo.paused && !currentVideo.ended &&
-        (fiLatencyActive || gpuPairPending);
+        (fiLatencyActive || gpuPairPending || fiBufferedMode);
       if (useLatency) {
         fiLatencyActive = true;
         sourceTex = fiPrevTexture;
+        if (fiBufferedMode && fiHasHistory) sourceTex = fiHistoryTexture;
+        fiPresentedAnchor = sourceTex;
         srcW = textureWidth;
         srcH = textureHeight;
         fiTag = " · FI anchor";
         presentation = "anchor";
-        if (fiMethod === "pending" || fiShouldPresentMid()) {
+        if (fiBufferedMode) {
+          fiScheduleBufferedMidFrame();
+        } else if (fiMethod === "pending" || fiShouldPresentMid()) {
           fiScheduleMidFrame(fiPairSerial, options.videoMetadata);
         }
       } else if (fiLatencyActive) {
@@ -2419,6 +2973,7 @@ function draw(options = {}) {
     presentation = "mid";
   } else if (fiLatencyActive && fiHasPrev && fiHasCurr) {
     sourceTex = fiPrevTexture;
+    if (fiBufferedMode && fiHasHistory) sourceTex = fiHistoryTexture;
     fiTag = " · FI anchor";
     presentation = "anchor";
   }
@@ -2444,6 +2999,13 @@ function draw(options = {}) {
       ravuLutError = lastError;
       return;
     }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ravuClassifyFramebuffer);
+    gl.viewport(0, 0, srcW, srcH);
+    gl.useProgram(ravuClassifyProgram);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sourceTex);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, ravuFramebuffer);
     gl.viewport(0, 0, srcW, srcH);
     gl.useProgram(ravuStepProgram);
@@ -2451,6 +3013,8 @@ function draw(options = {}) {
     gl.bindTexture(gl.TEXTURE_2D, sourceTex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, ravuLutTexture);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, ravuClassifyTexture);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, useRcas ? framebuffer : null);
@@ -2502,7 +3066,7 @@ function draw(options = {}) {
       settings.strength / 100,
       Math.max(canvas.width / srcW, canvas.height / srcH),
     );
-    if (useEasu && !ensureIntermediate()) {
+    if (useEasu && (!ensureEasuProgram() || !ensureIntermediate())) {
       if (gpuQuery) {
         gl.endQuery(timerExt.TIME_ELAPSED_EXT);
         gl.deleteQuery(gpuQuery);
@@ -2547,7 +3111,7 @@ function draw(options = {}) {
   if (settings.compare) {
     // Bypass the entire spatial chain on the left. For FI mids retain the
     // matching delayed source anchor, not the live video on a different clock.
-    const original = presentation === "mid" && fiHasPrev ? fiPrevTexture : sourceTex;
+    const original = presentation === "mid" && fiHasPrev ? (fiBufferedMode ? fiPresentedAnchor : fiPrevTexture) : sourceTex;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.enable(gl.SCISSOR_TEST);
@@ -2587,6 +3151,88 @@ function draw(options = {}) {
 // Loop de frames
 // --------------------------------------------------------------------------
 
+function fiObserveDisplayLead(now, metadata) {
+  if (!metadata || !Number.isFinite(metadata.expectedDisplayTime) || !Number.isFinite(now)) return;
+  const lead = metadata.expectedDisplayTime - now;
+  if (lead < -fiDisplayPeriod * .25 || lead > fiDisplayPeriod * 2) return;
+  fiDisplayLeads.push(Math.max(0, lead));
+  if (fiDisplayLeads.length > 12) fiDisplayLeads.shift();
+  const sorted = fiDisplayLeads.slice().sort((a, b) => a - b);
+  fiDisplayLeadMs = sorted[Math.floor(sorted.length / 2)];
+}
+
+function sparseVideoCallbacks(now, metadata) {
+  if (!metadata || useAnimationFallback || !settings.fiInfra || document.hidden ||
+      !currentVideo || currentVideo.paused || currentVideo.seeking) {
+    videoCallbackHealth = null;
+    return false;
+  }
+  const elapsed = lastVideoCallbackTime === null ? 0 : now - lastVideoCallbackTime;
+  const frames = lastPresentedFrames === null ? 0 : metadata.presentedFrames - lastPresentedFrames;
+  const quality = currentVideo.getVideoPlaybackQuality?.();
+  if (!quality || !Number.isFinite(quality.totalVideoFrames) || !Number.isFinite(quality.droppedVideoFrames)) {
+    videoCallbackHealth = null;
+    return false;
+  }
+  const health = videoCallbackHealth ||= { sparse: null, delivery: null };
+  const rate = currentVideo.playbackRate;
+  const mediaDuration = (metadata.mediaTime - lastMediaTime) * 1000 / (rate * frames);
+  const displayHealthy = fiDisplayReference > 0 && now - fiDisplayReference >= -fiDisplayPeriod &&
+    now - fiDisplayReference <= fiDisplayPeriod * 2;
+  let irregular = false;
+  // rVFC notifications can bunch up without changing their mean FPS.
+  // Compare delivery with the media clock, allowing normal vsync quantization.
+  // A stalled display clock, VFR, isolated pause or decoder loss is not evidence
+  // that sampling on that same display clock will improve frame delivery.
+  if (frames >= 1 && frames <= 4 && elapsed > 0 && elapsed <= 250 && Number.isFinite(lastMediaTime) &&
+      Number.isFinite(mediaDuration) && mediaDuration > 0 && mediaDuration <= 250 && rate > 0 &&
+      displayHealthy) {
+    let delivery = health.delivery;
+    if (!delivery || delivery.rate !== rate || quality.totalVideoFrames < delivery.total ||
+        quality.droppedVideoFrames !== delivery.dropped) {
+      delivery = health.delivery = { rate, total: quality.totalVideoFrames, dropped: quality.droppedVideoFrames, samples: [] };
+    } else {
+      delivery.samples.push({ duration: mediaDuration, residual: elapsed - mediaDuration * frames,
+        frames, decoded: quality.totalVideoFrames - delivery.total });
+      delivery.total = quality.totalVideoFrames;
+      if (delivery.samples.length > 12) delivery.samples.shift();
+      const samples = delivery.samples;
+      if (samples.length >= 8) {
+        const durations = samples.map(sample => sample.duration).sort((a, b) => a - b);
+        const duration = durations[Math.floor(durations.length / 2)];
+        const threshold = Math.max(fiDisplayPeriod * 1.5, duration * .25);
+        const steadyMedia = durations.at(-1) - durations[0] <= Math.max(1, duration * .05);
+        const decoded = samples.reduce((sum, sample) => sum + sample.decoded, 0);
+        const advanced = samples.reduce((sum, sample) => sum + sample.frames, 0);
+        irregular = steadyMedia && advanced * duration >= 200 && decoded >= advanced * .9 &&
+          samples.filter(sample => sample.residual > threshold).length >= 2 &&
+          samples.filter(sample => sample.residual < -threshold).length >= 1;
+      }
+    }
+  } else health.delivery = null;
+  // Keep missing-callback evidence separate: short catch-up intervals must not
+  // erase the adjacent-frame delivery window above.
+  if (!displayHealthy || !Number.isFinite(frames) || frames < 1 || elapsed <= fiDisplayPeriod * 1.6 || elapsed > 250) {
+    health.sparse = null;
+    return irregular;
+  }
+  if (frames === 1 && !health.sparse) return irregular;
+  if (!health.sparse) {
+    health.sparse = { start: now, callbacks: 1, presented: metadata.presentedFrames,
+      total: quality.totalVideoFrames, dropped: quality.droppedVideoFrames };
+    return irregular;
+  }
+  const probe = health.sparse;
+  probe.callbacks++;
+  const decoded = quality.totalVideoFrames - probe.total;
+  const dropped = quality.droppedVideoFrames - probe.dropped;
+  const advanced = metadata.presentedFrames - probe.presented;
+  const sparse = probe.callbacks >= 4 && now - probe.start >= 100 && advanced > (probe.callbacks - 1) * 1.15 &&
+    decoded >= advanced * .9 && dropped >= 0 && dropped <= decoded * .1;
+  if (!sparse && now - probe.start > 500) health.sparse = null;
+  return sparse || irregular;
+}
+
 function onFrame(now, metadata, callbackVideo = null, callbackSession = 0) {
   const videoForCallback = callbackVideo || currentVideo;
   if (stopped || !isCurrentFeedSession(videoForCallback, callbackSession)) return;
@@ -2594,7 +3240,19 @@ function onFrame(now, metadata, callbackVideo = null, callbackSession = 0) {
   frameWatchdog = null;
   rafId = null;
   scheduledKind = null;
+  fiObserveDisplayLead(now, metadata);
+  const switchClock = sparseVideoCallbacks(now, metadata);
   const freshFrame = recordVideoFrame(now, metadata);
+  if (switchClock) {
+    const duration = lastVideoFrameDurationMs;
+    const quality = currentVideo.getVideoPlaybackQuality();
+    resetVideoFrameHistory();
+    lastVideoFrameDurationMs = duration;
+    lastPlaybackTotal = quality.totalVideoFrames;
+    lastPlaybackDropped = quality.droppedVideoFrames;
+    useAnimationFallback = true;
+    resetFiPairState();
+  }
   fiPairDiscontinuous = fiResumeGap;
   if (fiResumeGap) {
     fiSkipReason = "Missing frame or timing gap — holding the delayed anchor.";
@@ -2615,7 +3273,7 @@ function onFrame(now, metadata, callbackVideo = null, callbackSession = 0) {
     return;
   }
   schedule();
-  if (freshFrame) draw({ newVideoFrame: true, videoMetadata: metadata });
+  if (freshFrame) draw({ newVideoFrame: true, videoMetadata: metadata, frameTime: now });
   if (freshFrame) {
     lastFreshFrameTime = now;
   } else if (!currentVideo.paused && !currentVideo.ended && lastFreshFrameTime !== null &&
@@ -2700,6 +3358,35 @@ function markDirty() {
   scheduleLayoutSync();
 }
 
+function observeVideoLayout(force = false, candidates = null) {
+  if (typeof MutationObserver !== "function") return false;
+  const videos = Array.from(candidates || (currentVideo ? [currentVideo] : []));
+  if (!force && currentVideo === layoutObservedVideo && (currentVideo?.parentElement || null) === layoutObservedParent &&
+      videos.length === layoutObservedCandidates.length && videos.every((video, index) => video === layoutObservedCandidates[index])) return false;
+  if (!videoLayoutObserver) videoLayoutObserver = new MutationObserver(records => {
+    const moved = records.some(record => record.type === "childList" &&
+      [...record.addedNodes, ...record.removedNodes].some(node => layoutObservedCandidates.some(video => node === video || node.contains?.(video))));
+    const relevant = moved || records.some(record => record.type === "attributes");
+    if (!relevant) return;
+    observeVideoLayout(true, layoutObservedCandidates);
+    // CSS can hide the active player or reveal a retained feed candidate.
+    scheduleRescan();
+    markDirty();
+  });
+  videoLayoutObserver.disconnect();
+  layoutObservedVideo = currentVideo;
+  layoutObservedParent = currentVideo?.parentElement || null;
+  layoutObservedCandidates = videos;
+  // Active playback watches one ancestor chain. With no eligible player,
+  // watch candidate chains until a feed reveals a video, without polling.
+  const observed = new Set();
+  for (const video of videos) for (let node = video; node && !observed.has(node); node = node.parentElement) {
+    observed.add(node);
+    videoLayoutObserver.observe(node, { attributes: true, attributeFilter: ["style", "class", "width", "height"], childList: true });
+  }
+  return true;
+}
+
 function scheduleRescan() {
   if (stopped || rescanRafScheduled || settings.mode === "off") return;
   rescanRafScheduled = true;
@@ -2752,6 +3439,9 @@ function attachActivePageListeners() {
 }
 
 function detachActivePageListeners() {
+  if (videoLayoutObserver) videoLayoutObserver.disconnect();
+  layoutObservedVideo = layoutObservedParent = null;
+  layoutObservedCandidates = [];
   if (!activePageListeners) return;
   activePageListeners = false;
   window.removeEventListener("resize", markDirty);
@@ -2813,10 +3503,17 @@ function attachDiscoveryListeners() {
     document.addEventListener(type, handleVideoReset, true);
   }
   // Native events discover new videos in SPAs without scanning the page in a loop.
-  document.addEventListener("play", handleVideoDiscovery, true);
+  // A feed can pause the previous player after its final scroll event, or
+  // make a buffered neighbour ready after play. Both change selector scores.
+  for (const type of ["play", "playing", "pause", "ended"]) {
+    document.addEventListener(type, handleVideoDiscovery, true);
+  }
   document.addEventListener("loadedmetadata", handleVideoDiscovery, true);
   document.addEventListener("emptied", handleVideoDiscovery, true);
   document.addEventListener("durationchange", handleVideoDiscovery, true);
+  // Before the first eligible player there is no canvas or active scroll
+  // handler. Scrolling must still discover already decoded feed videos.
+  window.addEventListener("scroll", handleVideoDiscovery, { passive: true, capture: true });
   // rVFC does not fire while paused: capture on pause/end/current-time changes.
   document.addEventListener("pause", handleStillFrame, true);
   document.addEventListener("ended", handleStillFrame, true);
@@ -2830,10 +3527,13 @@ function detachDiscoveryListeners() {
   for (const type of ["emptied", "loadedmetadata", "seeking", "playing", "ratechange", "resize"]) {
     document.removeEventListener(type, handleVideoReset, true);
   }
-  document.removeEventListener("play", handleVideoDiscovery, true);
+  for (const type of ["play", "playing", "pause", "ended"]) {
+    document.removeEventListener(type, handleVideoDiscovery, true);
+  }
   document.removeEventListener("loadedmetadata", handleVideoDiscovery, true);
   document.removeEventListener("emptied", handleVideoDiscovery, true);
   document.removeEventListener("durationchange", handleVideoDiscovery, true);
+  window.removeEventListener("scroll", handleVideoDiscovery, true);
   document.removeEventListener("pause", handleStillFrame, true);
   document.removeEventListener("ended", handleStillFrame, true);
   document.removeEventListener("seeked", handleStillFrame, true);
@@ -2845,7 +3545,7 @@ function detachDiscoveryListeners() {
 // --------------------------------------------------------------------------
 
 function handleVideoIntersection(entries) {
-  if (!currentVideo) {
+  if (!currentVideo || !hasVisibleVideo) {
     if (entries.some((entry) => entry.isIntersecting)) scheduleRescan();
     return;
   }
@@ -2880,6 +3580,7 @@ function rescan() {
     detachActivePageListeners();
     retireFeedSession();
     currentVideo = null;
+    hasVisibleVideo = false;
     if (status !== "no-video") {
       status = "no-video";
       log("no <video> on the page");
@@ -2888,14 +3589,25 @@ function rescan() {
     return;
   }
   const next = pickLargestVideo(videos, window.innerWidth, window.innerHeight);
-  if (!next && !currentVideo) {
+  if (!next) {
+    cancelScheduledFrame();
+    cancelFiMid();
+    if (hasVisibleVideo) { resetFiPairState(); resetVideoFrameHistory(); }
+    hasVisibleVideo = false;
+    status = "no-video";
+    layoutDirty = true;
+    hideCanvas();
+    const changed = observeVideoLayout(false, videos), previousObserver = videoIntersectionObserver;
     const observer = ensureVideoIntersectionObserver();
-    if (observer) {
+    // Re-observing an intersecting CSS-hidden player emits another initial
+    // callback. Subscribe only when candidates change, avoiding a rescan loop.
+    if (observer && (changed || !previousObserver)) {
       observer.disconnect();
       for (const video of videos) observer.observe(video);
     }
     return;
   }
+  hasVisibleVideo = true;
   const reusedVideoSourceChanged = Boolean(
     next && next === currentVideo && activeFeedSession &&
     typeof VEFeedSourceKey === "function" &&
@@ -2935,12 +3647,14 @@ function rescan() {
         next.videoWidth ? "(src " + next.videoWidth + "x" + next.videoHeight + ")" : "");
     if (settings.mode !== "off" && !activateRenderer(true)) return;
   }
+  observeVideoLayout();
   if (currentVideo && layoutDirty) syncLayout();
   if (currentVideo && currentVideo.paused && currentVideo.readyState >= 2) draw();
   schedule();
 }
 
 function hideCanvas() {
+  fiGpuEngine?.compositor?.setVisible(false);
   if (canvas) {
     canvas.style.width = "0";
     canvas.style.height = "0";
@@ -3056,6 +3770,9 @@ function snapshot() {
     lastError,
     visible: overlayVisible,
     hasVideo: Boolean(currentVideo),
+    hasVisibleVideo,
+    videoInViewport,
+    canRender: canRender(),
     canvasWidth: canvas ? canvas.width : 0,
     canvasHeight: canvas ? canvas.height : 0,
     pipeline: activePipeline,
@@ -3068,16 +3785,23 @@ function snapshot() {
     metrics: { ...metricReport, gpuSupported: Boolean(timerExt) },
     feed: feedSessionManager?.snapshot?.() || (currentVideo ? { id: feedSessionId, active: true } : null),
     fi: {
-      presentationDelayMs: fiLatencyActive ? lastVideoFrameDurationMs : 0,
-      backend: fiGpuState === "ready" ? ({neural:"Framegen compact neural (WebGPU)",ifrnet:"IFRNet-S neural (WebGL2)",analytic:"Analytic Flow (WebGL2; no neural weights)",classic:"Legacy LK (WebGPU)"}[fiGpuEngine?.kind]||"Preparing") : fiGpuState,
+      presentationDelayMs: fiLatencyActive ? lastVideoFrameDurationMs * (fiBufferedMode && fiHasHistory ? 2 : 1) : 0,
+      presentationLeadMs: fiDisplayLeadMs,
+      presentationCallbackDelayMs: fiDisplayCallbackDelayMs,
+      presentationBackend: fiDirectActive ? "webgpu" : "webgl2",
+      backend: fiGpuState === "ready" ? ({neural:"Framegen compact neural (WebGPU)",ifrnet:`IFRNet-S neural (${fiGpuEngine?.backend === "webgpu" ? "WebGPU" : "WebGL2"})`,analytic:"Analytic Flow (WebGL2; no neural weights)",classic:"Legacy LK (WebGPU)"}[fiGpuEngine?.kind]||"Preparing") : fiGpuState,
       requestedEngine: settings.fiEngine,
       actualEngine: fiGpuEngine?.kind || "none",
+      apiFallbackReason: fiWebGpuFailure,
       fallbackReason: fiNeuralFailure,
       profile: settings.fiProfile,
       edition: globalThis.VE_BUILD?.flavor || "personal",
       analytic: fiGpuEngine?.kind === "analytic" ? {...fiGpuEngine.stats, late:fiAnalyticLate, step:fiAnalyticStep, cooldownMs:Math.max(0,fiAnalyticRetryAt-now)} : null,
       neural: ["neural","ifrnet"].includes(fiGpuEngine?.kind) ? { ...fiGpuEngine.stats, modelSize: fiGpuEngine.modelSize, debug: settings.fiDebug,
         ...(fiGpuEngine.kind==="ifrnet"?{cancelled:fiGpuEngine.diagnostics.cancelledPairs,
+          captureMode:fiGpuEngine.captureMode,videoSnapshots:fiGpuEngine.diagnostics.videoSnapshots,
+          videoSnapshotFallbacks:fiGpuEngine.diagnostics.videoSnapshotFallbacks,
+          stagedConvolutions:fiGpuEngine.diagnostics.stagedConvolutions,
           deadlineCancelled:fiGpuEngine.diagnostics.deadlinePairs,maxDispatchMs:fiGpuEngine.diagnostics.maxDispatchMs,
           deadlineAgeMs:Number.isFinite(fiGpuEngine.diagnostics.lastDeadlineAt)?Math.max(0,now-fiGpuEngine.diagnostics.lastDeadlineAt):null,
           lastRun:fiGpuEngine.lastRun?{reason:fiGpuEngine.lastRun.reason,completed:fiGpuEngine.lastRun.completed,

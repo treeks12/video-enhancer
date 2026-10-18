@@ -40,17 +40,76 @@ vec4 ${name}B(vec2 p,int g){
 `;
 }
 function coords(o){return `ivec2 q=ivec2(gl_FragCoord.xy);ivec2 p=q%tensorSize;int g=q.x/tensorSize.x+q.y/tensorSize.y*${o.cols};if(g>=${o.groups}){color=vec4(0.0);return;}\n`;}
-function makeShader(op){
+function convUniforms(op){
+ if(op.type!=='conv')return null;
+ return {kernelConfig:op.layer.k|((op.stride||1)<<4)|(op.deconv?256:0)|(op.layer.slope?512:0),
+  outputLayout:[op.out.cols,op.out.groups],inputs:op.inputs.map(t=>[(baseOf(t)).cols,t.offset||0,t.c])};
+}
+function genericReader(t,name){
+ const unaligned=(t.offset||0)%4!==0;
+ return `uniform sampler2D ${name};
+uniform ivec2 ${name}Size;
+uniform ivec3 ${name}Layout;
+${unaligned?`float ${name}C(ivec2 p,int c){
+ if(c<0||c>=${name}Layout.z)return 0.0;
+ int k=c+${name}Layout.y;int g=k/4;
+ ivec2 q=clamp(p,ivec2(0),${name}Size-1);
+ return texelFetch(${name},q+ivec2(g%${name}Layout.x,g/${name}Layout.x)*${name}Size,0)[k%4];
+}`:''}
+vec4 ${name}V(ivec2 p,int g){
+ ${unaligned?`int k=g*4;return vec4(${name}C(p,k),${name}C(p,k+1),${name}C(p,k+2),${name}C(p,k+3));`:
+ `int k=g+${name}Layout.y/4;ivec2 q=clamp(p,ivec2(0),${name}Size-1);
+ vec4 v=texelFetch(${name},q+ivec2(k%${name}Layout.x,k/${name}Layout.x)*${name}Size,0);
+ if(${name}Layout.z%4!=0&&g==${name}Layout.z/4)v*=vec4(lessThan(ivec4(0,1,2,3),ivec4(${name}Layout.z%4)));
+ return v;`}
+}
+`;
+}
+function genericShader(op){
+ const {inputs:ins,residual=false}=op;
+ return HEAD+`uniform ivec2 tensorSize;
+uniform ivec2 outputLayout;
+uniform int kernelConfig;
+uniform sampler2D weights;
+`+ins.map((t,i)=>genericReader(t,'s'+i)).join('')+`void main(){
+ ivec2 q=ivec2(gl_FragCoord.xy);ivec2 p=q%tensorSize;
+ int g=q.x/tensorSize.x+q.y/tensorSize.y*outputLayout.x;
+ if(g>=outputLayout.y){color=vec4(0.0);return;}
+ int kernelSize=kernelConfig&15;int stride=(kernelConfig>>4)&15;
+ bool deconv=(kernelConfig&256)!=0;bool activation=(kernelConfig&512)!=0;
+ int area=kernelSize*kernelSize;int taps=deconv?2:kernelSize;
+ int ci=(textureSize(weights,0).x-2)/area;
+ vec4 total=texelFetch(weights,ivec2(0,g),0);
+ for(int ic=0;ic<ci;ic+=4){for(int y=0;y<taps;y++){for(int x=0;x<taps;x++){
+  int ky=y;int kx=x;ivec2 ip=p*stride+ivec2(x-1,y-1);
+  if(deconv){ky=(p.y+1)%2+2*y;kx=(p.x+1)%2+2*x;ip=ivec2((p.x+1-kx)/2,(p.y+1-ky)/2);}
+  if(ip.x<0||ip.y<0||ip.x>=s0Size.x||ip.y>=s0Size.y)continue;
+  vec4 v=s0V(ip,ic/4);int k=ky*kernelSize+kx;int ix=2+ic*area+k;
+  total+=v.x*texelFetch(weights,ivec2(ix,g),0);
+  if(ic+1<ci)total+=v.y*texelFetch(weights,ivec2(ix+area,g),0);
+  if(ic+2<ci)total+=v.z*texelFetch(weights,ivec2(ix+area*2,g),0);
+  if(ic+3<ci)total+=v.w*texelFetch(weights,ivec2(ix+area*3,g),0);
+ }}}
+ ${residual?'total+=s1V(p,g);':''}
+ if(activation)total=max(total,vec4(0.0))+min(total,vec4(0.0))*texelFetch(weights,ivec2(1,g),0);
+ color=total;
+}`;
+}
+function makeShader(op,{channelBlock=0,generic=false}={}){
  const {type,out:o,inputs:ins}=op;
+ if(type==='conv'&&generic)return genericShader(op);
  let src=HEAD+'uniform ivec2 tensorSize;\n'+ins.map((t,i)=>reader(t,'s'+i)).join('');
  let body=coords(o);
  if(type==='conv'){
   const {layer:l,stride=1,deconv=false,residual=false}=op;
+  if(!Number.isInteger(channelBlock)||channelBlock<0||channelBlock%4)throw new Error('Convolution channel block must be a non-negative multiple of four.');
   src+='uniform sampler2D weights;\n';
   body+=`vec4 total=texelFetch(weights,ivec2(0,g),0);\n`;
+  if(channelBlock)body+=`int ci=(textureSize(weights,0).x-2)/${l.k*l.k};\n`;
   // Four output channels per fragment; share each input texel across four FMAs.
   // Deconvolution visits only the 2x2 non-zero taps of a stride-2, 4x4 kernel.
-  body+=`for(int ic=0;ic<${l.ci};ic+=4){for(int y=0;y<${deconv?2:l.k};y++){for(int x=0;x<${deconv?2:l.k};x++){
+  const channelLoop=channelBlock?`for(int block=0;block<ci;block+=${channelBlock}){for(int lane=0;lane<${channelBlock};lane+=4){int ic=block+lane;if(ic>=ci)break;`:`for(int ic=0;ic<${l.ci};ic+=4){`;
+  body+=`${channelLoop}for(int y=0;y<${deconv?2:l.k};y++){for(int x=0;x<${deconv?2:l.k};x++){
    ${deconv?`int ky=(p.y+1)%2+2*y;int kx=(p.x+1)%2+2*x;ivec2 ip=ivec2((p.x+1-kx)/2,(p.y+1-ky)/2);`:
    `int ky=y;int kx=x;ivec2 ip=p*${stride}+ivec2(x-1,y-1);`}
    if(ip.x<0||ip.y<0||ip.x>=s0Size.x||ip.y>=s0Size.y)continue;
@@ -59,7 +118,7 @@ function makeShader(op){
    if(ic+1<${l.ci})total+=v.y*texelFetch(weights,ivec2(ix+${l.k*l.k},g),0);
    if(ic+2<${l.ci})total+=v.z*texelFetch(weights,ivec2(ix+${2*l.k*l.k},g),0);
    if(ic+3<${l.ci})total+=v.w*texelFetch(weights,ivec2(ix+${3*l.k*l.k},g),0);
-  }}}\n`;
+  }}}${channelBlock?'}':''}\n`;
   if(residual)body+='total+=s1V(p,g);\n';
   if(l.slope)body+='total=max(total,vec4(0.0))+min(total,vec4(0.0))*texelFetch(weights,ivec2(1,g),0);\n';
   body+='color=total;';
@@ -158,10 +217,11 @@ void main(){
 const STATS=HEAD+`
 uniform sampler2D prev;
 uniform sampler2D curr;
+uniform ivec2 sampleSize;
 void main(){
  float hp[16];float hc[16];for(int i=0;i<16;i++){hp[i]=0.0;hc[i]=0.0;}
  float mad=0.0,changed=0.0;
- for(int y=0;y<16;y++)for(int x=0;x<16;x++){
+ for(int y=0;y<sampleSize.y;y++)for(int x=0;x<sampleSize.x;x++){
   vec2 uv=(vec2(x,y)+0.5)/16.0;vec3 a=texture(prev,uv).rgb,b=texture(curr,uv).rgb;
   float la=dot(a,vec3(.2126,.7152,.0722)),lb=dot(b,vec3(.2126,.7152,.0722));
   hp[min(15,int(la*16.0))]+=1.0;hc[min(15,int(lb*16.0))]+=1.0;
@@ -170,6 +230,6 @@ void main(){
  float hist=0.0;for(int i=0;i<16;i++)hist+=abs(hp[i]-hc[i]);
  color=vec4(mad/256.0,hist/512.0,changed/256.0,1.0);
 }`;
-const api={VERT,HEAD,Graph,layout,view,baseOf,reader,makeShader,encoder,decoder,packLayer,synthShader,STATS};
+const api={VERT,HEAD,Graph,layout,view,baseOf,reader,makeShader,convUniforms,encoder,decoder,packLayer,synthShader,STATS};
 root.VENeuralGraph=api;if(typeof module!=='undefined')module.exports=api;
 })(globalThis);

@@ -36,14 +36,15 @@ The complete license and original preferred source are distributed in:
 GPL-3.0.txt is the unmodified GNU General Public License, version 3,
 distributed alongside the GNU Lesser General Public License, version 3.
 
-Local modifications are in third_party/ravu-lite/ravu-lite-webgl2.js:
+Local modifications are in third_party/ravu-lite/ravu-lite-webgl2.js
+and neural/webgpu-compositor.js:
 the mpv hook interface was ported to WebGL2, RGB input is converted to
 luminance, and the original 2x selection pass is fused with arbitrary-ratio
 RGB recomposition. The unmodified trained LUT is distributed as
 third_party/ravu-lite/ravu-lite-lut3.bin.
 
 IFRNet-S neural interpolation (bundled)
-Runtime implementation in neural/ with a WebGL2 inference engine.
+Runtime implementation in neural/ with WebGPU and WebGL2 inference engines.
 Reference implementation: https://github.com/ltkong218/IFRNet (MIT)
 Reference model port: https://github.com/nihui/ifrnet-ncnn-vulkan (MIT)
 Code notices: neural/LICENSE-IFRNet.txt, neural/LICENSE-ncnn-port.txt.

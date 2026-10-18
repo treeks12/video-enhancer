@@ -5,8 +5,9 @@ const code=['fiWarmGpu','fiResizeIfrGpu','fiReleaseGpu','fiUseClassicFallback'].
 const prelude=`
 let settings={fiInfra:true,fiEngine:'neural',fiProfile:'balanced',mode:'native'};
 let gl={},currentVideo={videoWidth:1280,videoHeight:720},fiAnalyticStep=0;
-let fiGpuInit=null,fiGpuEngine=null,fiGpuState='idle',fiGpuGeneration=0,fiNeuralFailure='',fiGpuError='';
+let fiGpuInit=null,fiGpuEngine=null,fiGpuState='idle',fiGpuGeneration=0,fiNeuralFailure='',fiWebGpuFailure='',fiGpuError='';
 let fiGpuController=null,fiGpuInitSize=null,feedSessionId=1;
+let fiBufferedEpoch=0,fiHasHistory=false;const fiBufferedPairs=new Map();
 let fiDisplayRaf=null,fiNeuralResult=null,fiNeuralTarget=null,fiGpuReadySerial=-1,fiGpuBusy=false,fiMethod='skip',fiSkipReason='',stopped=false;
 const fiMeasureDisplay=()=>{},cancelFiMid=()=>{},cancelAnimationFrame=()=>{};
 let resolveNeural;

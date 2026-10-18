@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "minimum_chrome_version": "99",
   "name": "Video Enhancer",
-  "version": "0.0.71",
+  "version": "0.0.72",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "permissions": [
@@ -41,6 +41,11 @@
   ],
   "content_scripts": [
     {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["neural/webgpu-device.js"],
+      "run_at": "document_start"
+    },
+    {
       "matches": [
         "http://*/*",
         "https://*/*"
@@ -58,6 +63,9 @@
         "neural/model-spec.js",
         "neural/graph.js",
         "neural/runtime.js",
+        "neural/webgpu-shaders.js",
+        "neural/webgpu-compositor.js",
+        "neural/webgpu-runtime.js",
         "neural/client.js",
         "content.js"
       ],

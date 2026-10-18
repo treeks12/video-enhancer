@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMON = ['build-flavor.js','feed-session.js','content.js','fi-analytic.js','fi-quality.js','fi-core.js',
           'fi-webgpu.js','popup.html','popup.js','THIRD_PARTY_NOTICES.txt','LICENSE-ANALYTIC.txt']
 # IFRNet-S runtime + attribution ship in both editions; the checkpoint is bundled.
-IFRNET = ['neural/model-spec.js','neural/graph.js','neural/runtime.js','neural/client.js',
+IFRNET = ['neural/model-spec.js','neural/graph.js','neural/runtime.js','neural/webgpu-device.js','neural/webgpu-shaders.js','neural/webgpu-compositor.js','neural/webgpu-runtime.js','neural/client.js',
           'neural/LICENSE-IFRNet.txt','neural/LICENSE-ncnn-port.txt','neural/MODEL-CARD.md',
           'models/ifrnet.bin']
 OPTIONAL = ['fi-neural-runtime.js','neural-model.js','fi-neural.js','models.html','models.js','models.css']
@@ -49,7 +49,8 @@ def entries_for(browser: str, flavor: str) -> dict[str, bytes]:
     else:
         for key in ['background','options_ui','optional_host_permissions','host_permissions']:
             manifest.pop(key,None)
-        manifest['content_scripts'][0]['js']=[n for n in manifest['content_scripts'][0]['js'] if n in names]
+        for script in manifest['content_scripts']:
+            script['js']=[n for n in script['js'] if n in names]
     # Both editions bundle the MIT-licensed IFRNet-S checkpoint; Framegen weights
     # remain personal-only and are never swept from local user data.
     for group in manifest.get('web_accessible_resources',[]):
@@ -84,7 +85,7 @@ def entries_for(browser: str, flavor: str) -> dict[str, bytes]:
             contents[n]=(json.dumps(data,ensure_ascii=False,indent=2)+'\n').encode()
     contents['manifest.json']=(json.dumps(manifest,indent=2)+'\n').encode()
     assert manifest['permissions']==['storage']
-    assert all(n in contents for n in manifest['content_scripts'][0]['js'])
+    assert all(n in contents for script in manifest['content_scripts'] for n in script['js'])
     assert len(contents['third_party/ravu-lite/ravu-lite-lut3.bin'])==59904
     assert len(contents['models/ifrnet.bin'])==5921992
     assert not any(n.endswith('.bin') and n not in BINARY_ALLOW for n in contents)
