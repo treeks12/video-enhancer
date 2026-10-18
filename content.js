@@ -63,6 +63,7 @@ function pickLargestVideo(videos, vw, vh) {
 const DEFAULT_SETTINGS = Object.freeze({
   mode: "off",
   strength: 100,
+  protectNoise: false,
   outline: false,
   compare: false,
   quality: "high",
@@ -97,6 +98,7 @@ function normalizeSettings(value = {}) {
     strength: Number.isFinite(strength)
       ? Math.min(100, Math.max(0, Math.round(strength)))
       : DEFAULT_SETTINGS.strength,
+    protectNoise: value.protectNoise === true,
     outline: value.outline === true,
     compare: value.compare === true,
     quality: ["auto", "high", "balanced", "performance"].includes(value.quality)
@@ -322,6 +324,7 @@ uniform sampler2D u_tex;
 uniform vec2 u_texel;
 uniform float u_strength;
 uniform float u_compare;
+uniform float u_noise_guard;
 in vec2 v_uv;
 out vec4 outColor;
 
@@ -341,6 +344,20 @@ vec3 rcas(vec2 uv) {
   vec3 lobeRgb = max(-hitMin, hitMax);
   float lobe = max(-0.1875, min(max(lobeRgb.r, max(lobeRgb.g, lobeRgb.b)), 0.0));
   lobe *= u_strength;
+  // Optional AMD RCAS noise-response limiter. Reuse the same five samples;
+  // this reduces sharpening of grain, rather than removing noise or detail.
+  if (u_noise_guard > 0.5) {
+    float bL = b.b * 0.5 + (b.r * 0.5 + b.g);
+    float dL = d.b * 0.5 + (d.r * 0.5 + d.g);
+    float eL = e.b * 0.5 + (e.r * 0.5 + e.g);
+    float fL = f.b * 0.5 + (f.r * 0.5 + f.g);
+    float hL = h.b * 0.5 + (h.r * 0.5 + h.g);
+    float highpass = 0.25 * bL + 0.25 * dL + 0.25 * fL + 0.25 * hL - eL;
+    float range = max(max(max(bL, dL), eL), max(fL, hL)) -
+      min(min(min(bL, dL), eL), min(fL, hL));
+    // Uniform black/white/flat neighborhoods must not divide by zero.
+    lobe *= 1.0 - 0.5 * clamp(abs(highpass) / max(range, 1e-4), 0.0, 1.0);
+  }
 
   return (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
 }
@@ -370,13 +387,15 @@ const COMPARE_RIGHT_ID = "fv-enhancer-compare-right";
 const INTERACTION_PAUSE_MS = 450;
 const INTERACTION_PREVIEW_MS = 67;
 let canvas, gl, program, easuProgram, rcasProgram, ravuClassifyProgram, ravuStepProgram, ravuComposeProgram;
+let overlayInitPromise = null;
+let overlayNeedsFirstFrame = false;
 let compareLeftEl = null;
 let compareRightEl = null;
 let flashTimer = null;
 let vao, texture;
-let uTexLoc = null, uTexelLoc = null, uStrengthLoc = null, uCompareLoc = null;
+let uTexLoc = null, uTexelLoc = null, uStrengthLoc = null, uCompareLoc = null, uNoiseGuardLoc = null;
 let easuTexLoc = null;
-let rcasTexLoc = null, rcasTexelLoc = null, rcasStrengthLoc = null, rcasCompareLoc = null;
+let rcasTexLoc = null, rcasTexelLoc = null, rcasStrengthLoc = null, rcasCompareLoc = null, rcasNoiseGuardLoc = null;
 let ravuSourceLoc = null, ravuLutLoc = null, ravuClassificationLoc = null, ravuClassifySourceLoc = null;
 let ravuComposeSourceLoc = null, ravuPackedLoc = null;
 let ravuSourceSizeLoc = null, ravuOutputTexelLoc = null, ravuCompareLoc = null;
@@ -449,9 +468,9 @@ let lastCanvasVisibility = "";
 let lastDatasetPipeline = "";
 let lastDatasetError = "";
 let lastDirectTexelX = NaN, lastDirectTexelY = NaN;
-let lastDirectStrength = NaN, lastDirectCompare = NaN;
+let lastDirectStrength = NaN, lastDirectCompare = NaN, lastDirectNoiseGuard = NaN;
 let lastRcasTexelX = NaN, lastRcasTexelY = NaN;
-let lastRcasStrength = NaN, lastRcasCompare = NaN;
+let lastRcasStrength = NaN, lastRcasCompare = NaN, lastRcasNoiseGuard = NaN;
 let lastRavuSourceW = NaN, lastRavuSourceH = NaN;
 let lastRavuOutTexelX = NaN, lastRavuOutTexelY = NaN;
 let lastRavuCompare = NaN;
@@ -710,27 +729,35 @@ function updateCanvasDataset(pipeline, error = "") {
 }
 
 function setDirectUniforms(texelX, texelY, strength, compare) {
+  const noiseGuard = settings.protectNoise ? 1 : 0;
   if (lastDirectTexelX === texelX && lastDirectTexelY === texelY &&
-      lastDirectStrength === strength && lastDirectCompare === compare) return;
+      lastDirectStrength === strength && lastDirectCompare === compare &&
+      lastDirectNoiseGuard === noiseGuard) return;
   gl.uniform2f(uTexelLoc, texelX, texelY);
   gl.uniform1f(uStrengthLoc, strength);
   gl.uniform1f(uCompareLoc, compare);
+  gl.uniform1f(uNoiseGuardLoc, noiseGuard);
   lastDirectTexelX = texelX;
   lastDirectTexelY = texelY;
   lastDirectStrength = strength;
   lastDirectCompare = compare;
+  lastDirectNoiseGuard = noiseGuard;
 }
 
 function setRcasUniforms(texelX, texelY, strength, compare) {
+  const noiseGuard = settings.protectNoise ? 1 : 0;
   if (lastRcasTexelX === texelX && lastRcasTexelY === texelY &&
-      lastRcasStrength === strength && lastRcasCompare === compare) return;
+      lastRcasStrength === strength && lastRcasCompare === compare &&
+      lastRcasNoiseGuard === noiseGuard) return;
   gl.uniform2f(rcasTexelLoc, texelX, texelY);
   gl.uniform1f(rcasStrengthLoc, strength);
   gl.uniform1f(rcasCompareLoc, compare);
+  gl.uniform1f(rcasNoiseGuardLoc, noiseGuard);
   lastRcasTexelX = texelX;
   lastRcasTexelY = texelY;
   lastRcasStrength = strength;
   lastRcasCompare = compare;
+  lastRcasNoiseGuard = noiseGuard;
 }
 
 function setRavuComposeUniforms(sourceW, sourceH, outTexelX, outTexelY, compare) {
@@ -2166,39 +2193,70 @@ function createOverlay() {
   }
   timerExt = gl.getExtension("EXT_disjoint_timer_query_webgl2");
   timerExtChecked = true;
-  program = linkProgram(VERT, FRAG);
-  easuProgram = null;
-  rcasProgram = linkProgram(VERT_PLAIN, FRAG);
-  if (!program || !rcasProgram) {
-    status = "no-webgl";
-    return false;
-  }
-  uTexLoc = gl.getUniformLocation(program, "u_tex");
-  uTexelLoc = gl.getUniformLocation(program, "u_texel");
-  uStrengthLoc = gl.getUniformLocation(program, "u_strength");
-  uCompareLoc = gl.getUniformLocation(program, "u_compare");
-  easuTexLoc = null;
-  rcasTexLoc = gl.getUniformLocation(rcasProgram, "u_tex");
-  rcasTexelLoc = gl.getUniformLocation(rcasProgram, "u_texel");
-  rcasStrengthLoc = gl.getUniformLocation(rcasProgram, "u_strength");
-  rcasCompareLoc = gl.getUniformLocation(rcasProgram, "u_compare");
-  gl.useProgram(program);
-  gl.uniform1i(uTexLoc, 0);
-  gl.useProgram(rcasProgram);
-  gl.uniform1i(rcasTexLoc, 0);
-
-  const buf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-  vao = gl.createVertexArray();
-  gl.bindVertexArray(vao);
-  const loc = gl.getAttribLocation(program, "a_pos");
-  gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-
+  program = rcasProgram = null;
+  overlayNeedsFirstFrame = true;
+  status = "preparing";
   applyCanvasOutline(false);
-  warmFiPrograms();
+  updateCanvasVisibility();
+  const context = gl;
+  const pending = prepareOverlayPrograms(context).then(() => {
+    if (!stopped && settings.mode !== "off" && gl === context) {
+      warmFiPrograms();
+      // Selection may have changed while the shaders compiled. Resume the
+      // current feed through discovery rather than a captured video/session.
+      scheduleRescan();
+    }
+  }).catch(error => {
+    if (!stopped && gl === context) {
+      status = settings.mode === "off" ? "off" : "no-webgl";
+      lastError = String(error?.message || error);
+      updateCanvasVisibility();
+      log("overlay shader preparation failed:", lastError);
+    }
+  }).finally(() => { if (overlayInitPromise === pending) overlayInitPromise = null; });
+  overlayInitPromise = pending;
   return true;
+}
+
+async function prepareOverlayPrograms(context) {
+  let direct = null, post = null, buffer = null, nextVao = null;
+  const check = () => {
+    if (stopped || context !== gl || context.isContextLost()) throw new Error("Overlay preparation cancelled.");
+  };
+  try {
+    check();
+    direct = await linkProgramCooperatively(VERT, FRAG);
+    // Browsers without parallel compilation still get a task boundary
+    // between the two programs instead of one combined startup pause.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    check();
+    post = await linkProgramCooperatively(VERT_PLAIN, FRAG);
+    check();
+    const names = ["u_tex", "u_texel", "u_strength", "u_compare", "u_noise_guard"];
+    const directLocations = names.map(name => context.getUniformLocation(direct, name));
+    const postLocations = names.map(name => context.getUniformLocation(post, name));
+    context.useProgram(direct); context.uniform1i(directLocations[0], 0);
+    context.useProgram(post); context.uniform1i(postLocations[0], 0);
+    buffer = context.createBuffer(); nextVao = context.createVertexArray();
+    if (!buffer || !nextVao) throw new Error("Overlay geometry allocation failed.");
+    context.bindBuffer(context.ARRAY_BUFFER, buffer);
+    context.bufferData(context.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), context.STATIC_DRAW);
+    context.bindVertexArray(nextVao);
+    const location = context.getAttribLocation(direct, "a_pos");
+    context.enableVertexAttribArray(location); context.vertexAttribPointer(location, 2, context.FLOAT, false, 0, 0);
+    // Publish a complete set. Native events cannot draw with half-prepared
+    // programs, and disabling the add-on can retain this completed cache.
+    program = direct; rcasProgram = post; vao = nextVao;
+    [uTexLoc, uTexelLoc, uStrengthLoc, uCompareLoc, uNoiseGuardLoc] = directLocations;
+    [rcasTexLoc, rcasTexelLoc, rcasStrengthLoc, rcasCompareLoc, rcasNoiseGuardLoc] = postLocations;
+    easuProgram = null; easuTexLoc = null;
+  } catch (error) {
+    if (direct) context.deleteProgram(direct);
+    if (post) context.deleteProgram(post);
+    if (buffer) context.deleteBuffer(buffer);
+    if (nextVao) context.deleteVertexArray(nextVao);
+    throw error;
+  }
 }
 
 function ensureEasuProgram() {
@@ -2559,8 +2617,14 @@ function activateRenderer(captureFrame = false) {
   attachActivePageListeners();
   observeVideoLayout();
   layoutDirty = true;
+  if (!program || !rcasProgram) {
+    if (overlayInitPromise) status = "preparing";
+    updateCanvasVisibility();
+    return false;
+  }
   updateCanvasVisibility();
   draw({ newVideoFrame: captureFrame });
+  overlayNeedsFirstFrame = false;
   schedule();
   return true;
 }
@@ -2721,13 +2785,13 @@ function fiLeaveDirectCompositor() {
 function fiDirectConfig() {
   if (!settings.fiInfra || !fiGpuEngine?.compositor?.ready || fiGpuEngine.destroyed || fiGpuEngine.lost) return null;
   const w = currentVideo.videoWidth, h = currentVideo.videoHeight;
-  if (!fiGpuEngine.compositor.canRenderDimensions?.(w, h, canvas.width, canvas.height)) return null;
   const ravu = settings.mode === "ravu" && shouldUseRavu(w, h, canvas.width, canvas.height, settings.quality);
   // FSR enlargement continues through its existing EASU implementation.
   if (!ravu && settings.mode !== "native" && (canvas.width > w || canvas.height > h)) return null;
-  return {algorithm:ravu ? "ravu" : settings.mode === "native" ? "native" : "rcas",
+  const config = {algorithm:ravu ? "ravu" : settings.mode === "native" ? "native" : "rcas",
     strength:settings.mode === "native" ? 0 : adjustedRcasStrength(settings.strength / 100, Math.max(canvas.width / w, canvas.height / h)),
-    compare:settings.compare};
+    compare:settings.compare, ...(settings.protectNoise ? {protectNoise:true} : {})};
+  return fiGpuEngine.compositor.canRenderDimensions?.(w, h, canvas.width, canvas.height, config) ? config : null;
 }
 
 function fiDrawDirect(options, drawKind, cpuStart) {
@@ -2802,7 +2866,7 @@ function fiDrawDirect(options, drawKind, cpuStart) {
 
 function draw(options = {}) {
   if (stopped || !canRender() ||
-      !currentVideo || !currentVideo.parentElement || !gl || !canvas.parentNode) return;
+      !currentVideo || !currentVideo.parentElement || !gl || !program || !rcasProgram || !canvas.parentNode) return;
   const drawKind = frameDrawKind(options);
   if (drawKind === "capture" && currentVideo.readyState < 2) {
     status = "buffering";
@@ -3648,6 +3712,12 @@ function rescan() {
     if (settings.mode !== "off" && !activateRenderer(true)) return;
   }
   observeVideoLayout();
+  // A paused player has no new rVFC after asynchronous initialization.
+  // Capture its current image once when discovery resumes the ready overlay.
+  if (currentVideo && overlayNeedsFirstFrame && program && rcasProgram) {
+    activateRenderer(true);
+    return;
+  }
   if (currentVideo && layoutDirty) syncLayout();
   if (currentVideo && currentVideo.paused && currentVideo.readyState >= 2) draw();
   schedule();
@@ -3671,7 +3741,7 @@ function applySettings(value) {
   const modeChanged = settings.mode !== previous.mode;
   const qualityChanged = settings.quality !== previous.quality;
   const visualChanged = settings.strength !== previous.strength ||
-    settings.compare !== previous.compare;
+    settings.compare !== previous.compare || settings.protectNoise !== previous.protectNoise;
   const outlineChanged = settings.outline !== previous.outline;
   const compareChanged = settings.compare !== previous.compare;
   const interactionChanged = settings.interaction !== previous.interaction;
@@ -3770,6 +3840,8 @@ function snapshot() {
     lastError,
     visible: overlayVisible,
     hasVideo: Boolean(currentVideo),
+    videoPaused: Boolean(currentVideo?.paused),
+    videoEnded: Boolean(currentVideo?.ended),
     hasVisibleVideo,
     videoInViewport,
     canRender: canRender(),

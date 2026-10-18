@@ -44,7 +44,7 @@ function expectedHalfLut(values){const bits=new Uint32Array(values.buffer,values
  let {device,dom,compositor:c}=await create();
  assert.equal(c.ready,true);assert.deepEqual(c.supportedAlgorithms,['native','rcas','ravu']);assert.equal(dom.nodes.length,1);assert.equal(c.canvas.style.visibility,'hidden');assert.equal(c.format,'bgra8unorm');
  assert.equal(c.canRenderDimensions(1280,720,1920,1080),true);assert.equal(c.canRenderDimensions(2560,1440,2560,1440),false);assert.equal(c.canRenderDimensions(3840,2160,3840,2160),false);assert.equal(c.canRenderDimensions(1920,1080,3840,2160),false);assert.equal(c.canRenderDimensions(0,24,64,48),false);
- dom.base.width=2560;dom.base.height=1440;const beforeCapacity=device.resources.length;assert.equal(c.render({external:{}},2560,1440),false);assert.equal(c.lastSkipReason,'capacity');assert.equal(device.resources.length,beforeCapacity,'permanently impossible shapes are rejected before allocating');dom.base.width=64;dom.base.height=32;
+ dom.base.width=2560;dom.base.height=1440;const beforeCapacity=device.resources.length;assert.equal(c.render({external:{}},2560,1440,{algorithm:'ravu',strength:1,compare:true}),false);assert.equal(c.lastSkipReason,'capacity');assert.equal(device.resources.length,beforeCapacity,'permanently impossible shapes are rejected before allocating');dom.base.width=64;dom.base.height=32;
  assert.deepEqual(Array.from(device.uploads[0].data.slice(0,4)),[0x3c00,0xb800,1,0x3c00],'LUT binary16 rounding matches GL RGBA16F, including tie-to-even');
  assert.equal(device.uploads[0].destination.texture.format,'rgba16float');assert.deepEqual(device.uploads[0].size,[13,288]);
  const LUT_FLOATS=13*288*4;
@@ -112,17 +112,60 @@ function expectedHalfLut(values){const bits=new Uint32Array(values.buffer,values
  assert.throws(()=>c.render({external:{}},64,32),/submission failed/);assert.equal(c.pending.size,0);assert.ok(c.slots.every(slot=>!slot.pending));assert.ok(Array.from(c.shapes.values()).every(shape=>shape.refs===0),'failed submit releases shape ownership');
  device.failSubmit=false;assert.equal(c.render({external:{}},64,32),true);await c.whenIdle();await c.destroy();
  ({device,dom,compositor:c}=await create());const bytesBefore=c.memoryBytes;device.failTextureAt=device.textureCalls+3;
- assert.throws(()=>c.render({external:{}},64,32),/texture allocation failed/);assert.equal(c.shapes.size,0);assert.equal(c.memoryBytes,bytesBefore,'partial shape allocation rolls back bytes/resources');device.failTextureAt=0;
+ assert.throws(()=>c.render({external:{}},64,32,{algorithm:'ravu'}),/texture allocation failed/);assert.equal(c.shapes.size,0);assert.equal(c.memoryBytes,bytesBefore,'partial shape allocation rolls back bytes/resources');device.failTextureAt=0;
  assert.equal(c.render({external:{}},64,32),true);await c.whenIdle();await c.destroy();
  ({device,dom,compositor:c}=await create());dom.base.width=3840;dom.base.height=2160;
- assert.equal(c.render({external:{}},512,288),true);await c.whenIdle();const largeOutput=c.output;
+ assert.equal(c.render({external:{}},512,288,{algorithm:'ravu',strength:1,compare:true}),true);await c.whenIdle();const largeOutput=c.output;
  assert.equal(c.snapshot(largeOutput,3840,2160,0),null,'an over-budget snapshot is refused');assert.equal(largeOutput.dead,false,'budget trimming cannot destroy the source about to be copied');assert.equal(c.output,largeOutput);await c.destroy();
  ({device,dom,compositor:c}=await create());dom.base.width=1920;dom.base.height=1080;
  assert.equal(c.render({external:{}},1920,1080),true);await c.whenIdle();const oldSnapshots=[c.snapshot(c.output,1920,1080,0),c.snapshot(c.output,1920,1080,1)];await c.whenIdle();
  assert.ok(oldSnapshots.every(Boolean));dom.base.width=3840;dom.base.height=2160;assert.equal(c.canRenderDimensions(1280,720,3840,2160),true);device.holding=true;
- assert.equal(c.render({external:{}},1280,720),false,'new source may wait once for old snapshot retirement');assert.equal(c.lastSkipReason,'busy');assert.deepEqual(c.snapshots,[null,null]);assert.ok(oldSnapshots.every(texture=>!texture.dead),'stale snapshot allocations survive until their shared-queue fence');
+ assert.equal(c.render({external:{}},1280,720,{algorithm:'ravu',strength:1,compare:true}),false,'new source may wait once for old snapshot retirement');assert.equal(c.lastSkipReason,'busy');assert.deepEqual(c.snapshots,[null,null]);assert.ok(oldSnapshots.every(texture=>!texture.dead),'stale snapshot allocations survive until their shared-queue fence');
  const retirement=c.whenIdle();while(device.gates.length)device.gates.shift()();device.holding=false;await retirement;assert.ok(oldSnapshots.every(texture=>texture.dead));
- assert.equal(c.render({external:{}},1280,720),true,'dimension transition recovers after drain without needing a new midpoint snapshot');await c.whenIdle();await c.destroy();
+ assert.equal(c.render({external:{}},1280,720,{algorithm:'ravu',strength:1,compare:true}),true,'dimension transition recovers after drain without needing a new midpoint snapshot');await c.whenIdle();await c.destroy();
+ // Allocation is driven by the selected spatial work, not an unused RAVU
+ // pipeline. Compare/mode changes preserve output identity and bounded bytes.
+ ({device,dom,compositor:c}=await create());
+ dom.base.width=2560;dom.base.height=1440;
+ assert.equal(c.canRenderDimensions(2560,1440,2560,1440,{algorithm:'native',strength:0,compare:false}),true,'native QHD fits without unused RAVU textures');
+ assert.equal(c.render({external:{}},2560,1440,{algorithm:'native'}),true);await c.whenIdle();
+ let shape=Array.from(c.shapes.values())[0];
+ assert.deepEqual(Object.keys(shape).filter(k=>['source','output','classification','packed','composed','comparison'].includes(k)).sort(),['output','source']);
+ assert.equal(shape.textures.length,2);assert.equal(c.memoryBytes,2560*1440*8+13*288*8+4*32);
+ assert.equal(c.canRenderDimensions(1920,1080,3840,2160,{algorithm:'rcas',strength:1,compare:true}),true,'1080p to 4K RCAS presentation admits its real working set');
+ await c.destroy();
+
+ ({device,dom,compositor:c}=await create());
+ assert.equal(c.render({external:{}},64,32,{algorithm:'ravu',strength:0}),true);await c.whenIdle();
+ shape=Array.from(c.shapes.values())[0];const originalOutput=shape.output,oldTextureCount=shape.textures.length;
+ assert.equal(shape.composed,undefined);assert.equal(shape.comparison,undefined);
+ const originalBytes=c.memoryBytes;device.failTextureAt=device.textureCalls+2;
+ assert.throws(()=>c.render({external:{}},64,32,{algorithm:'ravu',strength:1,compare:true}),/texture allocation failed/);
+ assert.equal(c.memoryBytes,originalBytes,'failed optional growth rolls back every new texture');
+ assert.equal(shape.textures.length,oldTextureCount);assert.equal(shape.output,originalOutput);
+ assert.equal(shape.composed,undefined);assert.equal(shape.comparison,undefined);
+ device.failTextureAt=0;
+ assert.equal(c.render({external:{}},64,32,{algorithm:'ravu',strength:1,compare:true,protectNoise:true}),true);await c.whenIdle();
+ assert.equal(shape.output,originalOutput);assert.ok(shape.composed&&shape.comparison);
+ assert.equal(new DataView(device.writes.at(-1).buffer).getUint32(28,true),1,'noise control reaches the immutable uniform slot');
+ await c.destroy();
+
+ ({device,dom,compositor:c}=await create());dom.base.width=3200;dom.base.height=1800;
+ const cutoverInput=device.createTexture({size:[1920,1080],format:'rgba8unorm',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
+ const beforeMode={algorithm:'ravu',strength:0,compare:true},afterMode={algorithm:'ravu',strength:1,compare:false};
+ assert.equal(c.canRenderDimensions(1920,1080,3200,1800,beforeMode),true);
+ assert.equal(c.canRenderDimensions(1920,1080,3200,1800,afterMode),true);
+ device.holding=true;
+ assert.equal(c.render({texture:cutoverInput},1920,1080,beforeMode),true);
+ const cutoverSnapshots=[c.snapshot(cutoverInput,1920,1080,0),c.snapshot(cutoverInput,1920,1080,1)];assert.ok(cutoverSnapshots.every(Boolean));
+ shape=Array.from(c.shapes.values())[0];const oldComparison=shape.comparison;
+ assert.equal(c.render({texture:cutoverInput},1920,1080,afterMode),false,'memory pressure waits for in-flight readers');
+ assert.equal(oldComparison.dead,false,'queued optional role is not destroyed');
+ const drainCutover=c.whenIdle();while(device.gates.length)device.gates.shift()();device.holding=false;await drainCutover;
+ assert.equal(c.render({texture:cutoverInput},1920,1080,afterMode),true,'drained obsolete roles cannot cause permanent busy');await c.whenIdle();
+ assert.equal(oldComparison.dead,true);assert.equal(shape.comparison,undefined);assert.ok(shape.composed);assert.ok(c.memoryBytes<=96*1024*1024);
+ assert.ok(cutoverSnapshots.every(texture=>!texture.dead),'current predictions survive mode change');
+ await c.destroy();assert.equal(cutoverInput.dead,false,'caller keeps source ownership');cutoverInput.destroy();
  // Extension fetch buffers can originate in the page/privileged realm. Their
  // Float32Array view is valid LUT data even though local instanceof rejects it.
  const foreignLut=vm.runInNewContext('new Float32Array(13*288*4)');foreignLut.set(lut);

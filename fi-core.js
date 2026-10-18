@@ -58,24 +58,20 @@ function fiSampleLuma(luma, w, h, x, y) {
  * Sum of absolute differences for a block.
  */
 function fiBlockSad(prev, curr, w, h, bx, by, bw, bh, mx, my) {
-  let sad = 0;
-  let count = 0;
-  for (let y = 0; y < bh; y++) {
-    const sy = by + y;
-    if (sy < 0 || sy >= h) continue;
-    const ty = sy + my;
-    if (ty < 0 || ty >= h) continue;
-    for (let x = 0; x < bw; x++) {
-      const sx = bx + x;
-      if (sx < 0 || sx >= w) continue;
-      const tx = sx + mx;
-      if (tx < 0 || tx >= w) continue;
-      sad += Math.abs(prev[sy * w + sx] - curr[ty * w + tx]);
-      count++;
-    }
-  }
+  // Clip the integer-pixel overlap once, retaining the same row-major sample
+  // and summation order. The inner loop needs no repeated edge tests.
+  const left = Math.max(0, bx, -mx), right = Math.min(w, bx + bw, w - mx);
+  const top = Math.max(0, by, -my), bottom = Math.min(h, by + bh, h - my);
+  const columns = Math.max(0, right - left), rows = Math.max(0, bottom - top);
+  const count = columns * rows;
   // A tiny overlap at the frame edge is not evidence for a reliable match.
-  return count >= Math.ceil(bw * bh / 2) ? sad / count : 1e9;
+  if (count < Math.ceil(bw * bh / 2)) return 1e9;
+  let sad = 0;
+  for (let y = top; y < bottom; y++) {
+    const a = y * w, b = (y + my) * w + mx;
+    for (let x = left; x < right; x++) sad += Math.abs(prev[a + x] - curr[b + x]);
+  }
+  return sad / count;
 }
 
 function fiFractionalSad(prev, curr, w, h, bx, by, bw, bh, mx, my) {

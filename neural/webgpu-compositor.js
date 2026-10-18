@@ -6,7 +6,7 @@
 (function(root){
 'use strict';
 const LIMIT=96*1024*1024,MAX_SHAPES=2,MAX_PENDING=4,LUT_W=13,LUT_H=288;
-const U=`struct Uniforms { sourceSize:vec2<u32>, outputSize:vec2<u32>, strength:f32, compare:u32, gradientCount:u32, pad:u32 };\n@group(0) @binding(0) var<uniform> u:Uniforms;\n`;
+const U=`struct Uniforms { sourceSize:vec2<u32>, outputSize:vec2<u32>, strength:f32, compare:u32, gradientCount:u32, protectNoise:u32 };\n@group(0) @binding(0) var<uniform> u:Uniforms;\n`;
 const SOURCE=`@group(0) @binding(1) var source:texture_2d<f32>;
 fn loadSource(p:vec2<i32>)->vec4<f32>{let size=vec2<i32>(textureDimensions(source));return textureLoad(source,clamp(p,vec2<i32>(0),size-1),0);}
 fn sampleSource(uv:vec2<f32>)->vec4<f32>{let p=uv*vec2<f32>(textureDimensions(source))-0.5;let b=vec2<i32>(floor(p));let f=fract(p);return mix(mix(loadSource(b),loadSource(b+vec2<i32>(1,0)),f.x),mix(loadSource(b+vec2<i32>(0,1)),loadSource(b+vec2<i32>(1,1)),f.x),f.y);}
@@ -87,6 +87,13 @@ function directCode(native=false){return U+SOURCE+COMPARE+`@group(0) @binding(3)
   let mn4=min(min(b,d),min(f,h));let mx4=max(max(b,d),max(f,h));
   let hitMin=min(mn4,e)/max(4.0*mx4,vec3<f32>(1e-4));let hitMax=(vec3<f32>(1.0)-max(mx4,e))/min(4.0*mn4-vec3<f32>(4.0),vec3<f32>(-1e-4));
   let lobeRgb=max(-hitMin,hitMax);var lobe=max(-0.1875,min(max(lobeRgb.r,max(lobeRgb.g,lobeRgb.b)),0.0));lobe*=u.strength;
+  if(u.protectNoise!=0u){
+   let bL=b.b*0.5+(b.r*0.5+b.g);let dL=d.b*0.5+(d.r*0.5+d.g);let eL=e.b*0.5+(e.r*0.5+e.g);
+   let fL=f.b*0.5+(f.r*0.5+f.g);let hL=h.b*0.5+(h.r*0.5+h.g);
+   let highpass=0.25*bL+0.25*dL+0.25*fL+0.25*hL-eL;
+   let range=max(max(max(bL,dL),eL),max(fL,hL))-min(min(min(bL,dL),eL),min(fL,hL));
+   lobe*=1.0-0.5*clamp(abs(highpass)/max(range,1e-4),0.0,1.0);
+  }
   rgb=(lobe*(b+d+f+h)+e)/(4.0*lobe+1.0);
  }`}
  textureStore(output,q,vec4<f32>(rgb,1.0));}`;}
@@ -165,31 +172,70 @@ class Compositor{
   for(let i=0;i<this.snapshots.length;i++){const slot=this.snapshots[i];if(slot&&(slot.w!==w||slot.h!==h)){this.snapshots[i]=null;this.retire(slot.texture);}}
  }
  trim(bytes=0,addingShape=false,protectedTextures=new Set()){for(const [key,shape]of this.shapes){if(this.shapes.size<=MAX_SHAPES-(addingShape?1:0)&&this.memoryBytes+bytes<=LIMIT)break;if(!shape.refs&&!shape.textures.some(texture=>protectedTextures.has(texture))){this.shapes.delete(key);this.freeShape(shape);}}}
- shape(sw,sh,ow,oh,protectedTextures){const key=[sw,sh,ow,oh].join('x');let shape=this.shapes.get(key);if(shape){this.shapes.delete(key);this.shapes.set(key,shape);return shape;}
-  const bytes=sw*sh*20+ow*oh*8;this.trim(bytes,true,protectedTextures);if(this.shapes.size>=MAX_SHAPES||this.memoryBytes+bytes>LIMIT)return null;
-  const usage=GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.COPY_SRC|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT,allocated=[];
-  const make=(w,h,format='rgba8unorm')=>{const texture=this.texture(w,h,format,usage);allocated.push(texture);return texture;};
-  try{shape={key,refs:0,source:make(sw,sh),comparison:make(sw,sh),classification:make(sw,sh),packed:make(sw,sh,'rgba16float'),composed:make(ow,oh),output:make(ow,oh)};shape.textures=allocated;this.shapes.set(key,shape);return shape;}catch(error){for(const texture of allocated)this.release(texture);throw error;}
+ layout(sw,sh,ow,oh,{algorithm='ravu',strength=1,compare=true}={}){
+  // Only reserve textures read by the selected pipeline. Native/RCAS do not
+  // need RAVU features; zero sharpening needs no post-process intermediate.
+  const roles=[['source',sw,sh,'rgba8unorm'],['output',ow,oh,'rgba8unorm']];
+  if(compare)roles.push(['comparison',sw,sh,'rgba8unorm']);
+  if(algorithm==='ravu'){
+   roles.push(['classification',sw,sh,'rgba8unorm'],['packed',sw,sh,'rgba16float']);
+   if(strength>0)roles.push(['composed',ow,oh,'rgba8unorm']);
+  }
+  return roles;
+ }
+ shape(sw,sh,ow,oh,protectedTextures,config){
+  const key=[sw,sh,ow,oh].join('x');let shape=this.shapes.get(key);
+  const missing=this.layout(sw,sh,ow,oh,config).filter(([role])=>!shape?.[role]);
+  const bytes=missing.reduce((sum,[,w,h,format])=>sum+w*h*(format==='rgba16float'?8:4),0);
+  // A mode/compare change may extend a cached shape. Never evict that shape
+  // (or an input being copied) while making room for its additional textures.
+  const protectedSet=new Set([...protectedTextures,...(shape?.textures||[])]);
+  this.trim(bytes,!shape,protectedSet);
+  if(shape&&!shape.refs&&this.memoryBytes+bytes>LIMIT){
+   // A mode change can fit on its own yet not alongside obsolete optional
+   // roles. Reclaim only drained, unused textures; queued readers and caller
+   // inputs stay alive. Otherwise a temporary "busy" could become permanent.
+   const needed=new Set(this.layout(sw,sh,ow,oh,config).map(([role])=>role));
+   for(const role of ['comparison','classification','packed','composed']){
+    const texture=shape[role];
+    if(texture&&!needed.has(role)&&!protectedTextures.has(texture)){
+     this.release(texture);delete shape[role];
+     shape.textures=shape.textures.filter(entry=>entry!==texture);
+    }
+   }
+  }
+  if((!shape&&this.shapes.size>=MAX_SHAPES)||this.memoryBytes+bytes>LIMIT)return null;
+  const usage=GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.COPY_SRC|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT;
+  const allocated={};
+  try{
+   for(const [role,w,h,format]of missing)allocated[role]=this.texture(w,h,format,usage);
+  }catch(error){for(const texture of Object.values(allocated))this.release(texture);throw error;}
+  // Publish additions atomically; failed additions preserve source/output
+  // and queued readers. Optional drained roles may have been evicted above.
+  if(!shape)shape={key,refs:0,textures:[]};
+  Object.assign(shape,allocated);shape.textures.push(...Object.values(allocated));
+  this.shapes.delete(key);this.shapes.set(key,shape);return shape;
  }
  dimensions(w,h){if(!Number.isInteger(w)||!Number.isInteger(h)||w<1||h<1||w>this.device.limits.maxTextureDimension2D||h>this.device.limits.maxTextureDimension2D)throw new Error('Invalid WebGPU compositor dimensions.');}
- canRenderDimensions(sw,sh,ow,oh){const max=this.device.limits.maxTextureDimension2D;if(![sw,sh,ow,oh].every(n=>Number.isInteger(n)&&n>0&&n<=max))return false;
-  // Reserve one full spatial shape plus both retained source-sized midpoint
-  // snapshots. Cache entries are disposable; the active shape and snapshots
-  // must fit together before switching presentation away from the GL canvas.
-  return sw*sh*28+ow*oh*8+(this.options.lut?LUT_W*LUT_H*8:0)+MAX_PENDING*32<=LIMIT;
+ canRenderDimensions(sw,sh,ow,oh,config){const max=this.device.limits.maxTextureDimension2D;if(![sw,sh,ow,oh].every(n=>Number.isInteger(n)&&n>0&&n<=max))return false;
+  // Include both retained source-sized predictions before admitting a mode.
+  // The bound is unchanged; dimensions and model quality are never reduced.
+  const shapeBytes=this.layout(sw,sh,ow,oh,config).reduce((sum,[,w,h,format])=>sum+w*h*(format==='rgba16float'?8:4),0);
+  return shapeBytes+sw*sh*8+(this.options.lut?LUT_W*LUT_H*8:0)+MAX_PENDING*32<=LIMIT;
  }
  group(program,resources){return this.device.createBindGroup({layout:program.layout,entries:resources.map((resource,binding)=>({binding,resource:program.kinds[binding]==='uniform'?{buffer:resource}:program.kinds[binding]==='external'||program.kinds[binding]==='sampler'?resource:resource.createView()}))});}
  dispatch(encoder,program,resources,w,h){const pass=encoder.beginComputePass({label:'Video compositor compute'});pass.setPipeline(program.pipeline);pass.setBindGroup(0,this.group(program,resources));pass.dispatchWorkgroups(Math.ceil(w/8),Math.ceil(h/8));pass.end();}
  drawSpatial(encoder,program,resources,output){const pass=encoder.beginRenderPass({colorAttachments:[{view:output.createView(),loadOp:'clear',clearValue:{r:0,g:0,b:0,a:1},storeOp:'store'}]});pass.setPipeline(program.pipeline);pass.setBindGroup(0,this.group(program,resources));pass.draw(3);pass.end();}
  copySource(encoder,descriptor,output,uniform,w,h){if(!descriptor||!!descriptor.external===!!descriptor.texture)throw new Error('A compositor source must contain exactly one external or texture resource.');const program=descriptor.external?this.programs.external:this.programs.copy;if(!program)throw new Error('External compositor capture was not prepared.');this.dispatch(encoder,program,[uniform,descriptor.external||descriptor.texture,output],w,h);}
  submit(encoder,slot=null,shape=null){const command=encoder.finish();if(slot)slot.pending=true;if(shape)shape.refs++;const record={promise:null};try{this.device.queue.submit([command]);}catch(error){if(slot)slot.pending=false;if(shape)shape.refs--;throw error;}let completion;try{completion=this.wait();}catch(error){completion=Promise.reject(error);}record.promise=Promise.resolve(completion).catch(error=>{this.error=error instanceof Error?error:new Error(String(error));throw this.error;}).finally(()=>{if(slot)slot.pending=false;if(shape)shape.refs--;this.pending.delete(record);});this.pending.add(record);record.promise.catch(()=>{});return record.promise;}
- render(source,sw,sh,{algorithm='native',strength=0,compare=false,comparisonSource=null}={}){
+ render(source,sw,sh,{algorithm='native',strength=0,compare=false,comparisonSource=null,protectNoise=false}={}){
   this.check();this.lastSkipReason='';if(!this.ready||this.pending.size>=MAX_PENDING){this.lastSkipReason='busy';return false;}if(!this.supportedAlgorithms.includes(algorithm))throw new Error('Unsupported WebGPU compositor algorithm: '+algorithm);
   this.dimensions(sw,sh);const ow=this.base.width,oh=this.base.height;this.dimensions(ow,oh);if(!Number.isFinite(strength)||strength<0||strength>1)throw new Error('Invalid WebGPU compositor strength.');
   this.transitionSource(sw,sh);
-  if(!this.canRenderDimensions(sw,sh,ow,oh)){this.lastSkipReason='capacity';return false;}
-  const shape=this.shape(sw,sh,ow,oh,new Set([source?.texture,comparisonSource?.texture]));if(!shape){this.lastSkipReason='busy';return false;}const slot=this.slots.find(slot=>!slot.pending);if(!slot){this.lastSkipReason='busy';return false;}
-  const data=new ArrayBuffer(32),view=new DataView(data);[sw,sh,ow,oh].forEach((v,i)=>view.setUint32(i*4,v,true));view.setFloat32(16,strength,true);view.setUint32(20,compare?1:0,true);view.setUint32(24,9,true);this.device.queue.writeBuffer(slot.buffer,0,data);
+  const config={algorithm,strength,compare};
+  if(!this.canRenderDimensions(sw,sh,ow,oh,config)){this.lastSkipReason='capacity';return false;}
+  const shape=this.shape(sw,sh,ow,oh,new Set([source?.texture,comparisonSource?.texture]),config);if(!shape){this.lastSkipReason='busy';return false;}const slot=this.slots.find(slot=>!slot.pending);if(!slot){this.lastSkipReason='busy';return false;}
+  const data=new ArrayBuffer(32),view=new DataView(data);[sw,sh,ow,oh].forEach((v,i)=>view.setUint32(i*4,v,true));view.setFloat32(16,strength,true);view.setUint32(20,compare?1:0,true);view.setUint32(24,9,true);view.setUint32(28,protectNoise?1:0,true);this.device.queue.writeBuffer(slot.buffer,0,data);
   const encoder=this.device.createCommandEncoder({label:'Video compositor frame'});this.copySource(encoder,source,shape.source,slot.buffer,sw,sh);
   const comparison=compare&&comparisonSource?shape.comparison:shape.source;if(comparison!==shape.source)this.copySource(encoder,comparisonSource,comparison,slot.buffer,sw,sh);
   if(algorithm==='ravu'){

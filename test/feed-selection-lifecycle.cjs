@@ -352,7 +352,15 @@ assert.ok(scheduleCalls > 2, 'rescan schedules the resumed current video');
 assert.equal(context.fiGpuEngine, retainedModel);
 assert.equal(releaseCalls, 0);
 
-
+// Ready shaders must force one upload even when the retained player is paused.
+const pausedActivationCount = activationCalls.length, pausedSessionId = context.feedSessionId;
+context.currentVideo.paused = true;
+context.overlayNeedsFirstFrame = true;
+context.rescan();
+assert.equal(activationCalls.length, pausedActivationCount + 1, 'asynchronous initialization captures the paused current image');
+assert.equal(context.overlayNeedsFirstFrame, false);
+assert.equal(context.feedSessionId, pausedSessionId, 'first paused upload does not replace the feed session');
+context.currentVideo.paused = false;
 
 // A feed pauses the previous player after scrolling has stopped. Its old
 // playing-area score must not keep owning the renderer until another scroll.
