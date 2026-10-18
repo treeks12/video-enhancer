@@ -1,5 +1,5 @@
 # Single packaging implementation, shared by Windows and other platforms.
-param([ValidateSet('all','store','personal')][string]$Flavor = 'all')
+param([ValidateSet('unified','all','store','personal')][string]$Flavor = 'unified')
 $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot 'tools/package.py'
 if (Get-Command py -ErrorAction SilentlyContinue) {

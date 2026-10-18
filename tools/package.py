@@ -35,14 +35,19 @@ def strip_personal(text: str) -> str:
 
 
 def entries_for(browser: str, flavor: str) -> dict[str, bytes]:
-    personal=flavor=='personal'
+    personal=flavor in ('personal','unified')
     manifest=json.loads((ROOT/('manifest.json' if browser=='firefox' else 'manifest.chromium.json')).read_text())
+    if browser == 'firefox' and 'background' in manifest:
+        manifest['background'].pop('service_worker',None)
     version=manifest['version']
     names=list(COMMON)+list(IFRNET)
     for folder in ['_locales','icons','third_party/ravu-lite']:
         names += [p.relative_to(ROOT).as_posix() for p in sorted((ROOT/folder).rglob('*')) if p.is_file()]
     if personal:
         names += OPTIONAL
+        if flavor == 'unified':
+            names += ['models/rt_v7s.json','models/rt_v7s.bin']
+            manifest.pop('optional_host_permissions',None)
         for folder in ['neural','third_party/framegen']:
             names += [p.relative_to(ROOT).as_posix() for p in sorted((ROOT/folder).rglob('*'))
                       if p.is_file() and p.suffix in ('.js','.md','.txt','')]
@@ -60,7 +65,7 @@ def entries_for(browser: str, flavor: str) -> dict[str, bytes]:
     for name in ['content.js','popup.js','popup.html']:
         if not personal: contents[name]=strip_personal(contents[name].decode()).encode()
     if not personal:
-        contents['THIRD_PARTY_NOTICES.txt']=contents['THIRD_PARTY_NOTICES.txt'].split(b'Optional Framegen backend (personal edition only)')[0].rstrip()+b'\n'
+        contents['THIRD_PARTY_NOTICES.txt']=contents['THIRD_PARTY_NOTICES.txt'].split(b'Framegen interpolation backend (bundled in the unified release)')[0].rstrip()+b'\n'
         s=contents['content.js'].decode()
         engine_old='((globalThis.VE_BUILD?.personal !== false ? ["analytic","classic","neural","ifrnet"] : ["analytic","classic"]).includes(value.fiEngine)) ? value.fiEngine : "ifrnet"'
         engine_new='(["analytic","classic","ifrnet"].includes(value.fiEngine)) ? value.fiEngine : "ifrnet"'
@@ -81,14 +86,17 @@ def entries_for(browser: str, flavor: str) -> dict[str, bytes]:
     # are alternative installations; do not enable both simultaneously on a page.
     for n in list(contents):
         if n.startswith('_locales/') and n.endswith('/messages.json'):
-            data=json.loads(contents[n]);data['extensionName']['message']+=' · '+('Personal' if personal else 'Store')
+            data=json.loads(contents[n])
+            if flavor != 'unified': data['extensionName']['message']+=' · '+('Personal' if personal else 'Store')
             contents[n]=(json.dumps(data,ensure_ascii=False,indent=2)+'\n').encode()
+    if flavor == 'unified':
+        contents['models.html']=(ROOT/'models-bundled.html').read_bytes()
     contents['manifest.json']=(json.dumps(manifest,indent=2)+'\n').encode()
     assert manifest['permissions']==['storage']
     assert all(n in contents for script in manifest['content_scripts'] for n in script['js'])
     assert len(contents['third_party/ravu-lite/ravu-lite-lut3.bin'])==59904
     assert len(contents['models/ifrnet.bin'])==5921992
-    assert not any(n.endswith('.bin') and n not in BINARY_ALLOW for n in contents)
+    assert not any(n.endswith('.bin') and n not in (BINARY_ALLOW | ({'models/rt_v7s.bin'} if flavor == 'unified' else set())) for n in contents)
     if not personal:
         assert all(n in contents for n in IFRNET)
         assert not any(n in OPTIONAL or n=='neural/background.js' for n in contents)
@@ -108,14 +116,14 @@ def write_zip(path: Path, entries: dict[str, bytes]):
     with zipfile.ZipFile(path) as z: assert z.testzip() is None
 
 
-def build(output: Path,flavor='all'):
+def build(output: Path,flavor='unified'):
     version=json.loads((ROOT/'manifest.json').read_text())['version']
     if version != json.loads((ROOT/'manifest.chromium.json').read_text())['version'] or not re.fullmatch(r'\d+(?:\.\d+){0,3}',version):
         raise ValueError('Invalid or unequal manifest versions')
     results=[]
     for f in ['store','personal'] if flavor=='all' else [flavor]:
         for browser in ['firefox','chromium']:
-            entries=entries_for(browser,f);name=f'video-enhancer-{version}-{f}-{browser}.zip';p=output/name
+            entries=entries_for(browser,f);name=f'video-enhancer-{version}-{browser}.zip' if f == 'unified' else f'video-enhancer-{version}-{f}-{browser}.zip';p=output/name
             write_zip(p,entries)
             row={'file':name,'flavor':f,'browser':browser,'bytes':p.stat().st_size,
                  'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'neuralWeightsBundled':'models/ifrnet.bin' in entries,
@@ -126,4 +134,4 @@ def build(output: Path,flavor='all'):
 
 if __name__=='__main__':
     ap=argparse.ArgumentParser();ap.add_argument('--output',type=Path,default=ROOT/'dist')
-    ap.add_argument('--flavor',choices=['all','store','personal'],default='all');a=ap.parse_args();build(a.output,a.flavor)
+    ap.add_argument('--flavor',choices=['all','store','personal','unified'],default='unified');a=ap.parse_args();build(a.output,a.flavor)

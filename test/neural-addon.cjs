@@ -7,6 +7,9 @@ const cp=require('node:child_process'),puppeteer=require('puppeteer-core');
 const root=path.resolve(__dirname,'..'),kind=process.env.TEST_BROWSER||'firefox';
 assert.ok(['firefox','chromium'].includes(kind));
 const uuid='7217abf0-9c45-4626-893d-d590ce32b605';
+const packageFlavor=process.env.ADDON_FLAVOR||'store',engine=process.env.ADDON_ENGINE||'ifrnet';
+assert.ok(['store','unified'].includes(packageFlavor));
+assert.ok(['ifrnet','neural'].includes(engine));
 const feeds=process.env.ADDON_FEED==='1';
 const mixedFeed=process.env.ADDON_MIXED_FEED==='1';
 const feedFixtures=feeds||mixedFeed;
@@ -26,10 +29,10 @@ async function until(action,predicate,timeout=60000){
  const temp=fs.mkdtempSync(path.join(os.tmpdir(),'video-enhancer-addon-'));
  let browser,server;
  try{
-  const build=cp.spawnSync('python',['tools/package.py','--flavor','store','--output',path.join(temp,'build')],{cwd:root,encoding:'utf8'});
+  const build=cp.spawnSync('python',['tools/package.py','--flavor',packageFlavor,'--output',path.join(temp,'build')],{cwd:root,encoding:'utf8'});
   assert.equal(build.status,0,build.stderr);
   const version=JSON.parse(fs.readFileSync(path.join(root,'manifest.json'))).version;
-  const zip=path.join(temp,'build',`video-enhancer-${version}-store-${kind==='firefox'?'firefox':'chromium'}.zip`);
+  const zip=path.join(temp,'build',`video-enhancer-${version}${packageFlavor==='unified'?'':'-store'}-${kind==='firefox'?'firefox':'chromium'}.zip`);
   const addon=path.join(temp,'addon');
   const unpack=cp.spawnSync('python',['-c','import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])',zip,addon],{encoding:'utf8'});
   assert.equal(unpack.status,0,unpack.stderr);
@@ -100,10 +103,10 @@ async function until(action,predicate,timeout=60000){
    if(error.name!=='TimeoutError'||loaded.url!==popupUrl||loaded.ready==='loading'||!loaded.storage)throw error;
    console.error('BiDi popup navigation event timed out; verified real loaded extension realm:',JSON.stringify(loaded));
   }
-  await helper.evaluate(async({phasedInit,profile,interaction})=>{
+  await helper.evaluate(async({phasedInit,profile,interaction,engine})=>{
    const api=globalThis.browser??globalThis.chrome;
-   await api.storage.local.set({mode:'ravu',strength:100,quality:'high',fiInfra:!phasedInit,fiEngine:'ifrnet',fiProfile:profile,interaction});
-  },{phasedInit,profile,interaction});
+   await api.storage.local.set({mode:'ravu',strength:100,quality:'high',fiInfra:!phasedInit,fiEngine:engine,fiProfile:profile,interaction});
+  },{phasedInit,profile,interaction,engine});
   console.error('Real extension storage configured; opening decoded-video fixture.');
   const page=await browser.newPage(),pageErrors=[];page.on('pageerror',error=>pageErrors.push(error.message));
   page.on('console',message=>{if(message.text().startsWith('Native device validation:'))console.error(message.text());});
@@ -173,7 +176,18 @@ async function until(action,predicate,timeout=60000){
    await helper.evaluate(async()=>{await (globalThis.browser??globalThis.chrome).storage.local.set({fiInfra:true});});
    console.error('Loading IFRNet while the real installed RAVU pipeline is already playing.');
   }
-  const ready=await until(read,state=>state?.status==='ok'&&state.fi?.actualEngine==='ifrnet'&&(state.fi.apiFallbackReason||state.fi.midPerSec>0));
+  const ready=await until(read,state=>state?.status==='ok'&&state.fi?.actualEngine===engine&&(state.fi.apiFallbackReason||state.fi.midPerSec>0));
+  if(engine==='neural'){
+   assert.match(ready.fi.backend,/WebGPU/);
+   assert.equal(ready.fi.fallbackReason,'');
+   const samples=[];
+   for(let i=0;i<4;i++){await wait(1000);const state=await read();
+    assert.equal(state.fi.actualEngine,'neural');assert.equal(state.fi.backendError,'');
+    samples.push({source:state.fi.realPerSec,mid:state.fi.midPerSec,backend:state.fi.backend});}
+   assert.ok(samples.some(row=>row.mid>0),'bundled Framegen must produce real midpoints');
+   assert.deepEqual(pageErrors,[]);
+   console.log(JSON.stringify({result:'PASS',test:'bundled Framegen native extension smoke',browser:kind,version,samples},null,2));return;
+  }
   if(mixedFeed)assert.ok(ready.feed?.key?.includes('/motion.mp4|'),'mixed-feed initial selection must be the visible motion video');
   console.error('Actual content script reports active neural interpolation:',JSON.stringify({backend:ready.fi.backend,presentation:ready.fi.presentationBackend,source:ready.fi.realPerSec,mid:ready.fi.midPerSec}));
   if(!ready.fi.backend.includes('WebGPU'))console.error('Real installed content-script diagnostic:',JSON.stringify(ready));

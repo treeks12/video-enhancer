@@ -31,10 +31,14 @@
   try{
    const manifestResponse=await fetch(ext.runtime.getURL('models/rt_v7s.json'));
    if(!manifestResponse.ok)throw new Error('No bundled manifest');
-   const manifest=await manifestResponse.json();
+   const manifest=JSON.parse(await manifestResponse.text());
    const binResponse=await fetch(ext.runtime.getURL('models/rt_v7s.bin'));
    if(!binResponse.ok)throw new Error('No bundled weights');
-   const binary=await binResponse.arrayBuffer();scope.FiNeuralRuntime.validateModel(manifest,binary,{production:true});
+   // Normalize fetch data into this content-script realm (Firefox isolates prototypes).
+   const source=new Uint8Array(await binResponse.arrayBuffer());
+   const binary=new ArrayBuffer(source.byteLength),local=new Uint8Array(binary);
+   for(let i=0;i<source.length;i++)local[i]=source[i];
+   scope.FiNeuralRuntime.validateModel(manifest,binary,{production:true});
    return {binary,manifest,id:ID,sha256:await sha256(binary)};
   }catch(error){throw new Error('Neural model not installed. Open Model setup in the popup. '+(error?.message||''));}
  }
