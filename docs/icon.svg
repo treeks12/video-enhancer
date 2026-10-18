@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Video Enhancer">
-  <defs>
-    <linearGradient id="bg" x1="8" y1="6" x2="40" y2="42" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1a3d32"/>
-      <stop offset="1" stop-color="#0d221c"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="12" fill="url(#bg)"/>
-  <rect x="1" y="1" width="46" height="46" rx="11" fill="none" stroke="#00d084" stroke-opacity=".35" stroke-width="2"/>
-  <path d="M10 32 L18 14 L24 26 L30 16 L38 32" fill="none" stroke="#00d084" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M10 36 H38" fill="none" stroke="#00d084" stroke-opacity=".4" stroke-width="2.6" stroke-linecap="round"/>
+  <defs><linearGradient id="blue" x1="7" y1="2" x2="39" y2="48" gradientUnits="userSpaceOnUse"><stop stop-color="#3e82ff"/><stop offset="1" stop-color="#2051cf"/></linearGradient></defs>
+  <rect width="48" height="48" rx="12" fill="url(#blue)"/>
+  <path d="M18.7 14.2c-1-.6-2.2.1-2.2 1.2v18c0 1.1 1.2 1.8 2.2 1.2l14.8-9c.9-.5.9-1.8 0-2.3z" fill="#fff"/>
+  <path d="m36.5 7 1.5 4.5 4.5 1.5-4.5 1.5-1.5 4.5-1.5-4.5-4.5-1.5 4.5-1.5z" fill="#dceaff"/>
 </svg>

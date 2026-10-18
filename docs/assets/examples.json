@@ -1,0 +1,57 @@
+[
+  {
+    "id": "spiderman",
+    "name": "Spider-Man: Across the Spider-Verse",
+    "kind": "Animation",
+    "crop": [
+      1900,
+      90,
+      672,
+      378
+    ],
+    "owner": "Sony Pictures / Marvel",
+    "source": "https://www.sonypictures.com/movies/spidermanacrossthespiderverse",
+    "asset": "https://www.sonypictures.com/sites/default/files/banner-images/2024-12/Spider-Man_Across_2572x1100_Landing_Page_Digital_BluRay_DVD_V1_1211_08.jpg"
+  },
+  {
+    "id": "forza",
+    "name": "Forza Horizon 5",
+    "kind": "Racing",
+    "owner": "Xbox Game Studios / Playground Games",
+    "source": "https://store.steampowered.com/app/1551360/",
+    "asset": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1551360/ss_00f0090174380eeaf8753bd3d1028b6772c3aebf.1920x1080.jpg?t=1788546569"
+  },
+  {
+    "id": "fortnite",
+    "name": "Fortnite",
+    "kind": "Gameplay",
+    "owner": "Epic Games",
+    "source": "https://www.youtube.com/watch?v=2gUtfBmw86Y",
+    "asset": "https://i.ytimg.com/vi/2gUtfBmw86Y/maxresdefault.jpg"
+  },
+  {
+    "id": "counterstrike",
+    "name": "Counter-Strike 2",
+    "kind": "Gameplay",
+    "owner": "Valve",
+    "source": "https://store.steampowered.com/app/730/",
+    "asset": "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/ss_13bb35638c0267759276f511ee97064773b37a51.1920x1080.jpg?t=1791824795"
+  },
+  {
+    "id": "avengers",
+    "input": "avengers-01",
+    "name": "Avengers: Endgame",
+    "kind": "Cinema",
+    "owner": "Marvel Studios / Disney",
+    "source": "https://movies.disney.com/avengers-endgame/",
+    "asset": "https://lumiere-a.akamaihd.net/v1/images/g_avengersendgame_01_17734_737ac855.jpeg?region=0%2C0%2C1200%2C560"
+  },
+  {
+    "id": "mrbeast",
+    "name": "MrBeast",
+    "kind": "Creators",
+    "owner": "MrBeast",
+    "source": "https://www.youtube.com/watch?v=0e3GPea1Tyg",
+    "asset": "https://i.ytimg.com/vi/0e3GPea1Tyg/maxresdefault.jpg"
+  }
+]

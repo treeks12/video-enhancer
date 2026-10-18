@@ -1,0 +1,14 @@
+{
+  "name": "Video Enhancer — Sharper Video & Up to 2× FPS",
+  "summary": "Upgrade your videos: sharper detail, adaptive upscaling and built-in AI interpolation for up to 2× FPS. Free and processed locally.",
+  "website": "https://treeks12.github.io/video-enhancer/",
+  "description": "**Your videos. Sharper. Smoother.**\n\nGive the videos you love a better picture and more fluid motion — with one free browser extension.\n\nMake soft, lower-resolution video look crisper on a bigger screen. Bring extra clarity to gameplay, movie trailers, your favorite creators and the vertical clips in your feed. Then turn on built-in neural frame interpolation for up to twice the frame rate: **30 → 60 FPS. 60 → 120 FPS.**\n\n**UPGRADE YOUR PICTURE**\n- Adaptive upscaling with FSR1 and RAVU-lite.\n- Adjustable RCAS sharpening for clearer edges and textures.\n- Original/enhanced comparison so you can see the difference as you watch.\n\n**GIVE MOTION MORE FLOW**\n- Built-in IFRNet-S AI frame interpolation.\n- New intermediate frames between the originals, for up to 2× output.\n- No separate app, model download or complicated setup.\n\n**YOUR BROWSER. YOUR GPU.**\nVideo processing stays on your device. No accounts, no video uploads, no telemetry and no subscription. Free to use, with source code on GitHub.\n\n**START WATCHING BETTER**\nInstall Video Enhancer, open a video, and choose FSR1 or RAVU-lite in the popup. Adjust the sharpness to your taste. Enable frame interpolation when you want smoother motion.\n\nWorks with compatible HTML5 video players. Maximum frame rate depends on your video, GPU and browser; a compatible high-refresh display is needed to see 120 FPS.\n\n[See interactive image comparisons and learn more](https://treeks12.github.io/video-enhancer/)",
+  "captions": [
+    "Your videos. Sharper. Smoother. Upscale and sharpen first, with built-in neural interpolation for up to 2× FPS.",
+    "Cinema image-processing comparison inside a Stremio Web-style player illustration. Same sample and actual RAVU-lite + RCAS shaders. No added blur.",
+    "Fortnite, Forza Horizon 5 and Counter-Strike 2 in familiar YouTube-style player illustrations. Enhance browser video playback, not the games themselves.",
+    "An independent MrBeast preview-image comparison in a YouTube-style player illustration, alongside the extension controls.",
+    "Up to twice the frame rate: 30 → 60 FPS and 60 → 120 FPS with built-in IFRNet-S. Output depends on your GPU, browser and display.",
+    "Your feed. A better picture. TikTok, Reels and YouTube Shorts-style vertical player illustrations. Compatible browser video players only."
+  ]
+}

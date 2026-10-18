@@ -1,0 +1,43 @@
+Video Enhancer image-processing demonstrations
+
+Independent demonstrations. No affiliation, sponsorship or endorsement is claimed.
+Featured names, characters and media remain the property of their respective owners.
+
+Image processing: each source is cropped to 16:9 and resampled to a 640x360 demo input.
+Before: native bilinear enlargement to 1280x720. After: released RAVU-lite + RCAS shaders, sharpness 85%.
+No extra blur, manual retouching, original high-resolution pixels or generated detail is added to the enhanced output.
+Promotional images and video-preview images are illustrative samples, not captures of playing video.
+
+The popup is the published 0.0.72 Store interface with example readings. It is not a benchmark.
+
+Spider-Man: Across the Spider-Verse
+Copyright: Sony Pictures / Marvel
+Source: https://www.sonypictures.com/movies/spidermanacrossthespiderverse
+Image: https://www.sonypictures.com/sites/default/files/banner-images/2024-12/Spider-Man_Across_2572x1100_Landing_Page_Digital_BluRay_DVD_V1_1211_08.jpg
+
+Forza Horizon 5
+Copyright: Xbox Game Studios / Playground Games
+Source: https://store.steampowered.com/app/1551360/
+Image: https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/1551360/ss_00f0090174380eeaf8753bd3d1028b6772c3aebf.1920x1080.jpg?t=1788546569
+
+Fortnite
+Copyright: Epic Games
+Source: https://www.youtube.com/watch?v=2gUtfBmw86Y
+Image: https://i.ytimg.com/vi/2gUtfBmw86Y/maxresdefault.jpg
+
+Counter-Strike 2
+Copyright: Valve
+Source: https://store.steampowered.com/app/730/
+Image: https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/730/ss_13bb35638c0267759276f511ee97064773b37a51.1920x1080.jpg?t=1791824795
+
+Avengers: Endgame
+Copyright: Marvel Studios / Disney
+Source: https://movies.disney.com/avengers-endgame/
+Image: https://lumiere-a.akamaihd.net/v1/images/g_avengersendgame_01_17734_737ac855.jpeg?region=0%2C0%2C1200%2C560
+
+MrBeast
+Copyright: MrBeast
+Source: https://www.youtube.com/watch?v=0e3GPea1Tyg
+Image: https://i.ytimg.com/vi/0e3GPea1Tyg/maxresdefault.jpg
+
+Player chrome is an illustration, not a recording of streaming playback. Stremio, YouTube, TikTok, Instagram/Reels and Shorts names belong to their respective owners. No affiliation or endorsement is claimed.
